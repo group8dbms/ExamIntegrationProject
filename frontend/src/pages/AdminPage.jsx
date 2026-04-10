@@ -64,6 +64,8 @@ function formatPublishState(state) {
       return "Waiting for evaluation";
     case "waiting_for_submissions":
       return "Waiting for submissions";
+    case "waiting_for_proctor_decision":
+      return "Waiting for proctor decision";
     default:
       return state || "Unknown";
   }
@@ -385,7 +387,7 @@ export default function AdminPage({ session, onLogout, setMessage }) {
 
   const publishBuckets = useMemo(() => ({
     ready: exams.filter((item) => item.publish_state === "ready_to_publish"),
-    waiting: exams.filter((item) => item.publish_state === "waiting_for_evaluation" || item.publish_state === "waiting_for_submissions"),
+    waiting: exams.filter((item) => item.publish_state === "waiting_for_evaluation" || item.publish_state === "waiting_for_submissions" || item.publish_state === "waiting_for_proctor_decision"),
     published: exams.filter((item) => item.publish_state === "published")
   }), [exams]);
 
@@ -834,7 +836,7 @@ export default function AdminPage({ session, onLogout, setMessage }) {
                         <strong>{item.title}</strong>
                         <p>{item.course_code}</p>
                       </div>
-                      <span className={item.publish_state === "published" ? "status-badge published" : item.publish_state === "ready_to_publish" ? "status-badge ready" : item.publish_state === "waiting_for_evaluation" ? "status-badge waiting" : "status-badge muted"}>
+                      <span className={item.publish_state === "published" ? "status-badge published" : item.publish_state === "ready_to_publish" ? "status-badge ready" : item.publish_state === "waiting_for_evaluation" || item.publish_state === "waiting_for_proctor_decision" ? "status-badge waiting" : "status-badge muted"}>
                         {formatPublishState(item.publish_state)}
                       </span>
                     </div>
@@ -957,7 +959,7 @@ export default function AdminPage({ session, onLogout, setMessage }) {
           <div className="task-intro">
             <p className="eyebrow">Use Case Three</p>
             <h3>Publish Evaluated Results</h3>
-            <p>Results stay grouped by exam. An exam becomes ready only after every assigned student has submitted and been evaluated, and publishing emails the full group together.</p>
+            <p>Results stay grouped by exam. An exam becomes ready only after every assigned student has submitted, been evaluated, and any opened integrity case has a proctor decision. Publishing then emails the full group together.</p>
           </div>
 
           <form className="task-card single-column" onSubmit={handlePublish}>
@@ -981,7 +983,7 @@ export default function AdminPage({ session, onLogout, setMessage }) {
                       </div>
                       <span className="status-badge ready">{formatPublishState(item.publish_state)}</span>
                     </div>
-                    <p className="info-line">Assigned: {item.candidate_count} | Submitted: {item.submitted_count} | Evaluated: {item.evaluated_count} | Published: {item.published_count}</p>
+                    <p className="info-line">Assigned: {item.candidate_count} | Submitted: {item.submitted_count} | Evaluated: {item.evaluated_count} | Open cases pending decision: {item.pending_case_decision_count} | Published: {item.published_count}</p>
                     <button type="button" className="primary-button" onClick={() => setPublishExamId(item.id)}>Select For Publish</button>
                   </div>
                 )) : <p>No exams are ready yet.</p>}
@@ -991,7 +993,7 @@ export default function AdminPage({ session, onLogout, setMessage }) {
             <div className="task-card">
               <div className="task-card-header">
                 <h3>Waiting Queue</h3>
-                <span className="info-line">Waiting on pending submissions or evaluation</span>
+                <span className="info-line">Waiting on submissions, evaluation, or proctor decisions</span>
               </div>
               <div className="list-box">
                 {publishBuckets.waiting.length ? publishBuckets.waiting.map((item) => (
@@ -1003,7 +1005,7 @@ export default function AdminPage({ session, onLogout, setMessage }) {
                       </div>
                       <span className={item.publish_state === "waiting_for_submissions" ? "status-badge muted" : "status-badge waiting"}>{formatPublishState(item.publish_state)}</span>
                     </div>
-                    <p className="info-line">Submitted: {item.submitted_count} | Evaluated: {item.evaluated_count} | Assigned: {item.candidate_count}</p>
+                    <p className="info-line">Assigned: {item.candidate_count} | Submitted: {item.submitted_count} | Evaluated: {item.evaluated_count} | Open cases pending decision: {item.pending_case_decision_count}</p>
                   </div>
                 )) : <p>No exams are waiting right now.</p>}
               </div>
@@ -1025,7 +1027,7 @@ export default function AdminPage({ session, onLogout, setMessage }) {
                     </div>
                     <span className="status-badge published">Published</span>
                   </div>
-                  <p className="info-line">Assigned: {item.candidate_count} | Published results: {item.published_count}</p>
+                  <p className="info-line">Assigned: {item.candidate_count} | Open cases: {item.opened_case_count} | Published results: {item.published_count}</p>
                 </div>
               )) : <p>No published exams yet.</p>}
             </div>

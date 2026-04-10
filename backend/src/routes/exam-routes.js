@@ -259,11 +259,14 @@ router.get(
           COUNT(DISTINCT s.student_id) AS submitted_count,
           COUNT(DISTINCT CASE WHEN r.status = 'draft' THEN r.student_id END) AS evaluated_count,
           COUNT(DISTINCT CASE WHEN r.status = 'published' THEN r.student_id END) AS published_count,
+          COALESCE(cp.opened_case_count, 0) AS opened_case_count,
+          COALESCE(cp.pending_case_decision_count, 0) AS pending_case_decision_count,
           CASE
             WHEN COUNT(DISTINCT CASE WHEN r.status = 'published' THEN r.student_id END) > 0 THEN 'published'
             WHEN COUNT(DISTINCT ec.student_id) = 0 THEN 'waiting_for_submissions'
             WHEN COUNT(DISTINCT s.student_id) < COUNT(DISTINCT ec.student_id) THEN 'waiting_for_submissions'
             WHEN COUNT(DISTINCT CASE WHEN r.status = 'draft' THEN r.student_id END) < COUNT(DISTINCT ec.student_id) THEN 'waiting_for_evaluation'
+            WHEN COALESCE(cp.pending_case_decision_count, 0) > 0 THEN 'waiting_for_proctor_decision'
             ELSE 'ready_to_publish'
           END AS publish_state
         FROM exam e
@@ -272,8 +275,25 @@ router.get(
         LEFT JOIN exam_question eq ON eq.exam_id = e.id
         LEFT JOIN answer_submission s ON s.exam_id = e.id AND s.final_answers IS NOT NULL
         LEFT JOIN result r ON r.exam_id = e.id
+        LEFT JOIN (
+          SELECT
+            latest.exam_id,
+            COUNT(DISTINCT latest.student_id) AS opened_case_count,
+            COUNT(DISTINCT CASE WHEN latest.decision IS NULL THEN latest.student_id END) AS pending_case_decision_count
+          FROM (
+            SELECT DISTINCT ON (exam_id, student_id, attempt_no)
+              id,
+              exam_id,
+              student_id,
+              attempt_no,
+              decision
+            FROM integrity_case
+            ORDER BY exam_id, student_id, attempt_no, opened_at DESC
+          ) latest
+          GROUP BY latest.exam_id
+        ) cp ON cp.exam_id = e.id
         ${where}
-        GROUP BY e.id, creator.full_name
+        GROUP BY e.id, creator.full_name, cp.opened_case_count, cp.pending_case_decision_count
         ORDER BY e.start_at DESC
       `,
       values
@@ -778,21 +798,47 @@ router.post(
           SELECT
             COUNT(DISTINCT ec.student_id) AS candidate_count,
             COUNT(DISTINCT s.student_id) AS submitted_count,
-            COUNT(DISTINCT CASE WHEN r.status = 'draft' THEN r.student_id END) AS evaluated_count
+            COUNT(DISTINCT CASE WHEN r.status = 'draft' THEN r.student_id END) AS evaluated_count,
+            COALESCE(cp.opened_case_count, 0) AS opened_case_count,
+            COALESCE(cp.pending_case_decision_count, 0) AS pending_case_decision_count
           FROM exam e
           LEFT JOIN exam_candidate ec ON ec.exam_id = e.id
           LEFT JOIN answer_submission s ON s.exam_id = e.id AND s.final_answers IS NOT NULL
           LEFT JOIN result r ON r.exam_id = e.id
+          LEFT JOIN (
+            SELECT
+              latest.exam_id,
+              COUNT(DISTINCT latest.student_id) AS opened_case_count,
+              COUNT(DISTINCT CASE WHEN latest.decision IS NULL THEN latest.student_id END) AS pending_case_decision_count
+            FROM (
+              SELECT DISTINCT ON (exam_id, student_id, attempt_no)
+                id,
+                exam_id,
+                student_id,
+                attempt_no,
+                decision
+              FROM integrity_case
+              ORDER BY exam_id, student_id, attempt_no, opened_at DESC
+            ) latest
+            GROUP BY latest.exam_id
+          ) cp ON cp.exam_id = e.id
           WHERE e.id = $1
-          GROUP BY e.id
+          GROUP BY e.id, cp.opened_case_count, cp.pending_case_decision_count
         `,
         [examId]
       );
 
-      const progress = examProgress.rows[0] || { candidate_count: 0, submitted_count: 0, evaluated_count: 0 };
+      const progress = examProgress.rows[0] || {
+        candidate_count: 0,
+        submitted_count: 0,
+        evaluated_count: 0,
+        opened_case_count: 0,
+        pending_case_decision_count: 0
+      };
       const candidateCount = Number(progress.candidate_count || 0);
       const submittedCount = Number(progress.submitted_count || 0);
       const evaluatedCount = Number(progress.evaluated_count || 0);
+      const pendingCaseDecisionCount = Number(progress.pending_case_decision_count || 0);
 
       if (!candidateCount) {
         await client.query("ROLLBACK");
@@ -807,6 +853,11 @@ router.post(
       if (evaluatedCount < candidateCount) {
         await client.query("ROLLBACK");
         return res.status(400).json({ message: "All assigned students in this exam must be evaluated before publishing results." });
+      }
+
+      if (pendingCaseDecisionCount > 0) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ message: "Open integrity cases must have a proctor decision before results can be published." });
       }
 
       const draftResults = await client.query(

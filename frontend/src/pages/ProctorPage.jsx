@@ -22,6 +22,16 @@ function formatDetails(details) {
   return entries.map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : String(value)}`).join(" | ");
 }
 
+function createDecisionDraft(sessionId, student = null) {
+  return {
+    status: student?.caseWorkflowStatus || "under_review",
+    decision: student?.caseDecision || "manual_review",
+    decisionNotes: student?.caseDecisionNotes || "",
+    actionBy: sessionId,
+    resolvedBy: sessionId
+  };
+}
+
 export default function ProctorPage({ session, onLogout, setMessage }) {
   const [liveExams, setLiveExams] = useState([]);
   const [selectedExamId, setSelectedExamId] = useState("");
@@ -29,6 +39,7 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
   const [studentLogs, setStudentLogs] = useState([]);
   const [selectedStudentKey, setSelectedStudentKey] = useState("");
   const [penaltyDrafts, setPenaltyDrafts] = useState({});
+  const [decisionDraft, setDecisionDraft] = useState(createDecisionDraft(session?.id));
 
   useEffect(() => {
     void loadLiveExams();
@@ -49,6 +60,10 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
     () => studentLogs.find((item) => `${item.studentId}:${item.attemptNo}` === selectedStudentKey) || null,
     [selectedStudentKey, studentLogs]
   );
+
+  useEffect(() => {
+    setDecisionDraft(createDecisionDraft(session?.id, selectedStudent));
+  }, [selectedStudent, session?.id]);
 
   async function loadLiveExams(announce = true) {
     try {
@@ -125,6 +140,50 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
     }
   }
 
+  async function openCaseForStudent() {
+    if (!selectedStudent || !selectedExamId) {
+      setMessage("Choose a flagged student first.");
+      return;
+    }
+
+    try {
+      const data = await api("/api/integrity/cases/open", {
+        method: "POST",
+        body: JSON.stringify({
+          examId: selectedExamId,
+          studentId: selectedStudent.studentId,
+          attemptNo: selectedStudent.attemptNo,
+          openedBy: session.id,
+          actorRole: "proctor",
+          summary: `Case opened by proctor for ${selectedStudent.studentName} after reviewing suspicious activity logs.`
+        })
+      });
+      setMessage(data.reused ? "Existing open case loaded for this student." : "New integrity case opened for this student.");
+      await loadExamLogs(selectedExamId, false);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  async function saveCaseDecision(event) {
+    event.preventDefault();
+    if (!selectedStudent?.caseId) {
+      setMessage("Open a case for this student first.");
+      return;
+    }
+
+    try {
+      await api(`/api/integrity/cases/${selectedStudent.caseId}/decision`, {
+        method: "PATCH",
+        body: JSON.stringify({ ...decisionDraft, actorRole: "proctor" })
+      });
+      setMessage("Proctor decision saved for this case.");
+      await loadExamLogs(selectedExamId, false);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
   return <section className="workspace-shell">
     <div className="workspace-header">
       <div>
@@ -138,8 +197,8 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
     <div className="task-page">
       <div className="task-intro">
         <p className="eyebrow">Live Monitoring</p>
-        <h3>Review Suspicious Activity Logs and Assign Penalties Manually</h3>
-        <p>Only students with suspicious activity appear here. Events are logged automatically during the exam and remain stored after completion, so the proctor can review them later and assign penalties manually.</p>
+        <h3>Review Suspicious Activity Logs, Assign Penalties, and Close Case Decisions</h3>
+        <p>Only students with suspicious activity appear here. Events stay stored after the exam, and the proctor can both assign penalties and record the case decision needed before admin publishes results.</p>
       </div>
 
       <div className="publish-grid">
@@ -152,7 +211,7 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
                   <strong>{exam.title}</strong>
                   <p>{exam.course_code}</p>
                 </div>
-                <span className="status-badge waiting">Live</span>
+                <span className="status-badge waiting">Logs</span>
               </div>
               <p className="info-line">Flagged students: {exam.flagged_student_count} | Suspicious events: {exam.suspicious_event_count}</p>
               <p className="info-line">Window: {formatDateTime(exam.start_at)} to {formatDateTime(exam.end_at)}</p>
@@ -179,56 +238,81 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
                 <span className={student.integrityScore > 0 ? "status-badge waiting" : "status-badge muted"}>Penalty total: {student.integrityScore}</span>
               </div>
               <p className="info-line">Events: {student.totalEvents} | Last seen: {formatDateTime(student.lastEventAt)}</p>
-              <p className="info-line">Case status: {student.caseStatus} | Hash verified: {student.submissionHashVerified ? "Yes" : "No"}</p>
+              <p className="info-line">Case: {student.caseId ? student.caseWorkflowStatus || student.caseStatus : "Not opened"} | Decision: {student.caseDecision || "Pending"}</p>
             </button>)}
             {!studentLogs.length && <p>No suspicious logs recorded for this exam yet.</p>}
           </div>
         </div>
       </div>
 
-      <div className="task-card">
-        {selectedStudent ? <>
-          <div className="task-card-header">
-            <div>
-              <h3>{selectedStudent.studentName}</h3>
-              <p className="info-line">{selectedStudent.studentEmail}</p>
-              <p className="info-line">Manual penalty total: {selectedStudent.integrityScore} | Events logged: {selectedStudent.totalEvents}</p>
+      <div className="task-page task-layout-split">
+        <div className="task-card">
+          {selectedStudent ? <>
+            <div className="task-card-header">
+              <div>
+                <h3>{selectedStudent.studentName}</h3>
+                <p className="info-line">{selectedStudent.studentEmail}</p>
+                <p className="info-line">Manual penalty total: {selectedStudent.integrityScore} | Events logged: {selectedStudent.totalEvents}</p>
+                <p className="info-line">Latest case: {selectedStudent.caseId || "Not opened"} | Decision: {selectedStudent.caseDecision || "Pending"}</p>
+              </div>
+              <span className="status-badge waiting">Attempt {selectedStudent.attemptNo}</span>
             </div>
-            <span className="status-badge waiting">Attempt {selectedStudent.attemptNo}</span>
-          </div>
 
-          <div className="question-list">
-            {selectedStudent.events.map((event) => {
-              const draft = penaltyDrafts[event.eventId] || { penaltyPoints: "", note: "" };
-              return <div key={event.eventId} className="question-preview-card">
-                <div className="publish-card-top">
-                  <div>
-                    <strong>{formatEventLabel(event.eventType)}</strong>
-                    <p className="info-line">{formatDateTime(event.eventTime)}</p>
+            <div className="form-actions">
+              <button type="button" className="secondary-button" onClick={openCaseForStudent}>{selectedStudent.caseId && !selectedStudent.caseDecision ? "Open Existing Case" : "Open Case"}</button>
+            </div>
+
+            <div className="question-list">
+              {selectedStudent.events.map((event) => {
+                const draft = penaltyDrafts[event.eventId] || { penaltyPoints: "", note: "" };
+                return <div key={event.eventId} className="question-preview-card">
+                  <div className="publish-card-top">
+                    <div>
+                      <strong>{formatEventLabel(event.eventType)}</strong>
+                      <p className="info-line">{formatDateTime(event.eventTime)}</p>
+                    </div>
+                    <span className={event.penaltyPoints !== null ? "status-badge ready" : "status-badge muted"}>{event.penaltyPoints !== null ? `Penalty: ${event.penaltyPoints}` : "No penalty assigned"}</span>
                   </div>
-                  <span className={event.penaltyPoints !== null ? "status-badge ready" : "status-badge muted"}>{event.penaltyPoints !== null ? `Penalty: ${event.penaltyPoints}` : "No penalty assigned"}</span>
-                </div>
-                <span><strong>IP:</strong> {event.ipAddress || "-"}</span>
-                <span><strong>Device:</strong> {event.deviceFingerprint || "-"}</span>
-                <span><strong>Details:</strong> {formatDetails(event.details)}</span>
-                <span><strong>Assigned by:</strong> {event.assignedByName || "Not assigned yet"}</span>
-                <div className="task-page task-layout-split compact-split">
-                  <label className="field">
-                    <span>Penalty Points</span>
-                    <input type="number" min="0" step="0.5" value={draft.penaltyPoints} onChange={(e) => setPenaltyDrafts({ ...penaltyDrafts, [event.eventId]: { ...draft, penaltyPoints: e.target.value } })} placeholder="0" />
-                  </label>
-                  <label className="field">
-                    <span>Proctor Note</span>
-                    <input value={draft.note} onChange={(e) => setPenaltyDrafts({ ...penaltyDrafts, [event.eventId]: { ...draft, note: e.target.value } })} placeholder="Explain the penalty decision" />
-                  </label>
-                </div>
-                <div className="form-actions">
-                  <button type="button" className="primary-button" onClick={() => assignPenalty(event.eventId)}>Save Penalty</button>
-                </div>
-              </div>;
-            })}
-          </div>
-        </> : <p>Select an exam and a flagged student to review live suspicious activity logs.</p>}
+                  <span><strong>IP:</strong> {event.ipAddress || "-"}</span>
+                  <span><strong>Device:</strong> {event.deviceFingerprint || "-"}</span>
+                  <span><strong>Details:</strong> {formatDetails(event.details)}</span>
+                  <span><strong>Assigned by:</strong> {event.assignedByName || "Not assigned yet"}</span>
+                  <div className="task-page task-layout-split compact-split">
+                    <label className="field">
+                      <span>Penalty Points</span>
+                      <input type="number" min="0" step="0.5" value={draft.penaltyPoints} onChange={(e) => setPenaltyDrafts({ ...penaltyDrafts, [event.eventId]: { ...draft, penaltyPoints: e.target.value } })} placeholder="0" />
+                    </label>
+                    <label className="field">
+                      <span>Proctor Note</span>
+                      <input value={draft.note} onChange={(e) => setPenaltyDrafts({ ...penaltyDrafts, [event.eventId]: { ...draft, note: e.target.value } })} placeholder="Explain the penalty decision" />
+                    </label>
+                  </div>
+                  <div className="form-actions">
+                    <button type="button" className="primary-button" onClick={() => assignPenalty(event.eventId)}>Save Penalty</button>
+                  </div>
+                </div>;
+              })}
+            </div>
+          </> : <p>Select an exam and a flagged student to review suspicious activity logs.</p>}
+        </div>
+
+        <div className="task-card">
+          {selectedStudent ? <form className="single-column" onSubmit={saveCaseDecision}>
+            <div className="task-card-header">
+              <div>
+                <h3>Proctor Decision</h3>
+                <p className="info-line">A case decision is required before admin can publish results for exams with opened cases.</p>
+              </div>
+            </div>
+
+            <p className="info-line">Case ID: {selectedStudent.caseId || "Open a case first"}</p>
+            <p className="info-line">Opened at: {formatDateTime(selectedStudent.caseOpenedAt)} | Closed at: {formatDateTime(selectedStudent.caseClosedAt)}</p>
+            <label className="field"><span>Status</span><select value={decisionDraft.status} onChange={(e) => setDecisionDraft({ ...decisionDraft, status: e.target.value })}><option value="under_review">Under Review</option><option value="cleared">Cleared</option><option value="confirmed_cheating">Confirmed Cheating</option><option value="resolved">Resolved</option></select></label>
+            <label className="field"><span>Decision</span><select value={decisionDraft.decision} onChange={(e) => setDecisionDraft({ ...decisionDraft, decision: e.target.value })}><option value="manual_review">Manual Review</option><option value="warning">Warning</option><option value="no_issue">No Issue</option><option value="invalidate_exam">Invalidate Exam</option></select></label>
+            <label className="field"><span>Decision Notes</span><textarea rows="6" value={decisionDraft.decisionNotes} onChange={(e) => setDecisionDraft({ ...decisionDraft, decisionNotes: e.target.value })} placeholder="Summarize the proctor decision for this case" /></label>
+            <div className="form-actions"><button className="primary-button" type="submit" disabled={!selectedStudent.caseId}>Save Proctor Decision</button></div>
+          </form> : <p>Select a flagged student to open a case and record the proctor decision.</p>}
+        </div>
       </div>
     </div>
   </section>;

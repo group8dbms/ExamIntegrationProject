@@ -106,6 +106,12 @@ router.get(
           ec.suspicion_score,
           COALESCE(vcs.case_status, 'not_opened') AS case_status,
           COALESCE(vcs.submission_hash_verified, FALSE) AS submission_hash_verified,
+          latest_case.id AS case_id,
+          latest_case.status AS case_workflow_status,
+          latest_case.decision AS case_decision,
+          latest_case.decision_notes AS case_decision_notes,
+          latest_case.opened_at AS case_opened_at,
+          latest_case.closed_at AS case_closed_at,
           ie.id AS event_id,
           ie.event_type,
           ie.event_time,
@@ -120,6 +126,13 @@ router.get(
         JOIN app_user u ON u.id = ie.student_id
         JOIN exam_candidate ec ON ec.exam_id = ie.exam_id AND ec.student_id = ie.student_id AND ec.attempt_no = ie.attempt_no
         LEFT JOIN v_candidate_integrity_summary vcs ON vcs.exam_id = ie.exam_id AND vcs.student_id = ie.student_id AND vcs.attempt_no = ie.attempt_no
+        LEFT JOIN LATERAL (
+          SELECT id, status, decision, decision_notes, opened_at, closed_at
+          FROM integrity_case c
+          WHERE c.exam_id = ie.exam_id AND c.student_id = ie.student_id AND c.attempt_no = ie.attempt_no
+          ORDER BY c.opened_at DESC
+          LIMIT 1
+        ) latest_case ON TRUE
         LEFT JOIN integrity_penalty_assignment ipa ON ipa.event_id = ie.id
         LEFT JOIN app_user proctor ON proctor.id = ipa.assigned_by
         WHERE ie.exam_id = $1
@@ -141,6 +154,12 @@ router.get(
           candidateStatus: row.candidate_status,
           integrityScore: Number(row.suspicion_score || 0),
           caseStatus: mapCaseStatus(row.case_status),
+          caseId: row.case_id || null,
+          caseWorkflowStatus: row.case_workflow_status || null,
+          caseDecision: row.case_decision || null,
+          caseDecisionNotes: row.case_decision_notes || "",
+          caseOpenedAt: row.case_opened_at || null,
+          caseClosedAt: row.case_closed_at || null,
           submissionHashVerified: row.submission_hash_verified,
           totalEvents: 0,
           lastEventAt: row.event_time,
@@ -345,6 +364,84 @@ router.post(
 
       await client.query("COMMIT");
       res.json({ penalty: penaltyResult.rows[0], candidateSummary: candidateResult.rows[0] || null });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  })
+);
+
+
+router.post(
+  "/cases/open",
+  asyncHandler(async (req, res) => {
+    const { examId, studentId, attemptNo = 1, openedBy = null, actorRole = "proctor", summary = null } = req.body;
+
+    if (!examId || !studentId) {
+      return res.status(400).json({ message: "examId and studentId are required." });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const latestCase = await client.query(
+        `
+          SELECT *
+          FROM integrity_case
+          WHERE exam_id = $1 AND student_id = $2 AND attempt_no = $3
+          ORDER BY opened_at DESC
+          LIMIT 1
+        `,
+        [examId, studentId, attemptNo]
+      );
+
+      if (latestCase.rows.length && latestCase.rows[0].decision === null) {
+        await client.query("COMMIT");
+        return res.json({ case: latestCase.rows[0], reused: true });
+      }
+
+      const candidateScore = await client.query(
+        `
+          SELECT suspicion_score
+          FROM exam_candidate
+          WHERE exam_id = $1 AND student_id = $2 AND attempt_no = $3
+        `,
+        [examId, studentId, attemptNo]
+      );
+
+      const openedCase = await client.query(
+        `
+          INSERT INTO integrity_case (
+            exam_id, student_id, attempt_no, opened_by, status, current_score, threshold_at_open, summary
+          ) VALUES ($1, $2, $3, $4, 'open', $5, NULL, $6)
+          RETURNING *
+        `,
+        [examId, studentId, attemptNo, openedBy, Number(candidateScore.rows[0]?.suspicion_score || 0), summary || 'Case opened by proctor after reviewing suspicious activity logs.']
+      );
+
+      await client.query(
+        `
+          INSERT INTO case_action (case_id, action_type, note, action_by)
+          VALUES ($1, 'case_opened', $2, $3)
+        `,
+        [openedCase.rows[0].id, summary || 'Case opened by proctor after reviewing suspicious activity logs.', openedBy]
+      );
+
+      await writeAuditLog(client, {
+        actorUserId: openedBy,
+        actorRole,
+        action: 'integrity_case_opened',
+        entityType: 'integrity_case',
+        entityId: openedCase.rows[0].id,
+        ipAddress: req.ip,
+        details: { examId, studentId, attemptNo }
+      });
+
+      await client.query("COMMIT");
+      res.status(201).json({ case: openedCase.rows[0], reused: false });
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
