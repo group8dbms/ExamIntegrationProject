@@ -1,0 +1,31 @@
+# Environment
+.env
+**/.env
+!.env.example
+!**/.env.example
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build output
+dist/
+**/dist/
+.vite/
+**/.vite/
+
+# Logs
+*.log
+backend.err.log
+backend.log
+frontend.err.log
+frontend.log
+vite-start.err.log
+vite-start.out.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
