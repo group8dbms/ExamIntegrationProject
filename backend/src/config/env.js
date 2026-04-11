@@ -22,7 +22,10 @@ const env = {
   smtpPort: Number(process.env.SMTP_PORT || 587),
   smtpUser: process.env.SMTP_USER || "",
   smtpPass: process.env.SMTP_PASS || "",
-  smtpFrom: process.env.SMTP_FROM || ""
+  smtpFrom: process.env.SMTP_FROM || "",
+  awsRegion: process.env.AWS_REGION || "",
+  s3Bucket: process.env.S3_BUCKET || "",
+  maxUploadSizeBytes: Number(process.env.MAX_UPLOAD_SIZE_BYTES || 10 * 1024 * 1024)
 };
 
 if (!env.databaseUrl) {

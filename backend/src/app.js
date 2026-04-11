@@ -9,6 +9,7 @@ const examRoutes = require("./routes/exam-routes");
 const submissionRoutes = require("./routes/submission-routes");
 const integrityRoutes = require("./routes/integrity-routes");
 const auditRoutes = require("./routes/audit-routes");
+const documentsRoutes = require("./routes/documents-routes");
 const errorHandler = require("./middleware/error-handler");
 
 const app = express();
@@ -28,7 +29,8 @@ app.get("/", (req, res) => {
       exams: "/api/exams",
       submissions: "/api/submissions",
       integrity: "/api/integrity",
-      audit: "/api/audit"
+      audit: "/api/audit",
+      documents: "/api/documents"
     }
   });
 });
@@ -39,6 +41,7 @@ app.use("/api/exams", examRoutes);
 app.use("/api/submissions", submissionRoutes);
 app.use("/api/integrity", integrityRoutes);
 app.use("/api/audit", auditRoutes);
+app.use("/api/documents", documentsRoutes);
 
 app.use(errorHandler);
 

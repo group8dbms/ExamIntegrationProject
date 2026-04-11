@@ -25,6 +25,8 @@ export default function AuditorPage({ session, onLogout, setMessage }) {
   const [selectedExam, setSelectedExam] = useState(null);
   const [students, setStudents] = useState([]);
   const [logs, setLogs] = useState([]);
+  const [documents, setDocuments] = useState([]);
+  const [storageConfigured, setStorageConfigured] = useState(false);
 
   useEffect(() => {
     void loadExamAudits();
@@ -55,9 +57,21 @@ export default function AuditorPage({ session, onLogout, setMessage }) {
       setSelectedExam(data.exam || null);
       setStudents(data.students || []);
       setLogs(data.logs || []);
+      const docs = await api(`/api/documents?examId=${examId}`);
+      setDocuments(docs.items || []);
+      setStorageConfigured(Boolean(docs.storageConfigured));
       if (announce) {
         setMessage(`Loaded audit details for ${data.exam?.title || "the selected exam"}.`);
       }
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  async function openDocument(documentId) {
+    try {
+      const data = await api(`/api/documents/${documentId}/access-url`);
+      window.open(data.url, "_blank", "noopener,noreferrer");
     } catch (error) {
       setMessage(error.message);
     }
@@ -68,6 +82,8 @@ export default function AuditorPage({ session, onLogout, setMessage }) {
     setSelectedExam(null);
     setStudents([]);
     setLogs([]);
+    setDocuments([]);
+    setStorageConfigured(false);
   }
 
   return <section className="workspace-shell">
@@ -167,6 +183,35 @@ export default function AuditorPage({ session, onLogout, setMessage }) {
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div className="task-card">
+        <div className="task-card-header"><h3>Stored Documents</h3><span className="info-line">S3-backed scanned scripts, reports, and integrity evidence for this exam</span></div>
+        {!storageConfigured ? <p className="info-line">S3 storage is not configured on the backend yet.</p> : <div className="audit-table-wrap">
+          <table className="audit-table">
+            <thead>
+              <tr>
+                <th>Document Type</th>
+                <th>Student</th>
+                <th>File Name</th>
+                <th>Uploaded By</th>
+                <th>Created</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {documents.map((item) => <tr key={item.id}>
+                <td>{item.document_type}</td>
+                <td>{item.student_name || "-"}</td>
+                <td>{item.original_name || item.s3_key}</td>
+                <td>{item.uploaded_by_name || "system"}</td>
+                <td>{formatDateTime(item.created_at)}</td>
+                <td><button type="button" className="secondary-button" onClick={() => openDocument(item.id)}>Open</button></td>
+              </tr>)}
+              {!documents.length ? <tr><td colSpan="6">No stored documents are linked to this exam yet.</td></tr> : null}
+            </tbody>
+          </table>
+        </div>}
       </div>
 
       <div className="task-card">
