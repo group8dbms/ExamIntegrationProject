@@ -34,6 +34,8 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   const [integrityInfo, setIntegrityInfo] = useState({ tabSwitches: 0, copyAttempts: 0, pasteAttempts: 0, ipAddress: null, integrityScore: 0, caseStatus: "clear", submissionHashVerified: false });
   const [localWarning, setLocalWarning] = useState("");
   const [warningVersion, setWarningVersion] = useState(0);
+  const examPaperRef = useRef(null);
+  const answersRef = useRef({});
   const autosaveRef = useRef(null);
   const timerRef = useRef(null);
   const ipPollRef = useRef(null);
@@ -52,6 +54,14 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     };
   }, [examId]);
 
+  useEffect(() => {
+    examPaperRef.current = examPaper;
+  }, [examPaper]);
+
+  useEffect(() => {
+    answersRef.current = answers;
+  }, [answers]);
+
   function cleanupRuntime() {
     if (autosaveRef.current) window.clearInterval(autosaveRef.current);
     if (timerRef.current) window.clearInterval(timerRef.current);
@@ -67,11 +77,13 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     try {
       const data = await api(`/api/exams/${examId}/paper?studentId=${session.id}`);
       setExamPaper(data);
+      examPaperRef.current = data;
       const seed = {};
       data.questions.forEach((question) => {
         seed[question.id] = question.question_type === "msq" ? [] : "";
       });
       setAnswers(seed);
+      answersRef.current = seed;
 
       const activeAttempt = localStorage.getItem(ACTIVE_ATTEMPT_KEY);
       if (activeAttempt && activeAttempt !== `${data.exam.id}:${session.id}:${data.exam.attempt_no}`) {
@@ -155,14 +167,15 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   }
 
   async function logIntegrityEvent(eventType, details = {}, weight = null, ipOverride = null) {
-    if (!examPaper) return;
+    const activeExamPaper = examPaperRef.current;
+    if (!activeExamPaper) return;
     try {
       const data = await api("/api/integrity/events", {
         method: "POST",
         body: JSON.stringify({
-          examId: examPaper.exam.id,
+          examId: activeExamPaper.exam.id,
           studentId: session.id,
-          attemptNo: examPaper.exam.attempt_no,
+          attemptNo: activeExamPaper.exam.attempt_no,
           eventType,
           weight,
           ipAddress: ipOverride || ipAddressRef.current,
@@ -221,19 +234,20 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
 
   function handleBeforeUnload() {
     if (!submittedRef.current) {
-      void autosaveAnswers(answers);
+      void autosaveAnswers(answersRef.current);
     }
   }
 
   async function autosaveAnswers(currentAnswers = answers) {
-    if (!examPaper || submittedRef.current) return;
+    const activeExamPaper = examPaperRef.current;
+    if (!activeExamPaper || submittedRef.current) return;
     try {
       await api("/api/submissions/autosave", {
         method: "POST",
         body: JSON.stringify({
-          examId: examPaper.exam.id,
+          examId: activeExamPaper.exam.id,
           studentId: session.id,
-          attemptNo: examPaper.exam.attempt_no,
+          attemptNo: activeExamPaper.exam.attempt_no,
           actorUserId: session.id,
           currentAnswers
         })
@@ -255,24 +269,25 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   }
 
   async function submitExam(autoSubmit = false) {
-    if (!examPaper || submittedRef.current) return;
+    const activeExamPaper = examPaperRef.current;
+    if (!activeExamPaper || submittedRef.current) return;
     submittedRef.current = true;
     cleanupRuntime();
     try {
       await api("/api/submissions/finalize", {
         method: "POST",
         body: JSON.stringify({
-          examId: examPaper.exam.id,
+          examId: activeExamPaper.exam.id,
           studentId: session.id,
-          attemptNo: examPaper.exam.attempt_no,
+          attemptNo: activeExamPaper.exam.attempt_no,
           actorUserId: session.id,
-          finalAnswers: answers
+          finalAnswers: answersRef.current
         })
       });
       localStorage.removeItem(ACTIVE_ATTEMPT_KEY);
       setMessage(autoSubmit ? "Time is over. Exam auto-submitted successfully." : "Exam submitted successfully.");
       if (window.opener && !window.opener.closed) {
-        window.opener.postMessage({ type: "student-exam-submitted", examId: examPaper.exam.id }, window.location.origin);
+        window.opener.postMessage({ type: "student-exam-submitted", examId: activeExamPaper.exam.id }, window.location.origin);
       }
       window.setTimeout(() => onExit?.(), 1200);
     } catch (error) {
