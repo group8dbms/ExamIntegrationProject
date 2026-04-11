@@ -178,7 +178,6 @@ export default function AdminPage({ session, onLogout, setMessage }) {
 
     const threshold = Number(quiz.integrityThreshold);
     if (!Number.isFinite(threshold) || threshold < 1 || threshold > 100) next.integrityThreshold = "Integrity threshold must be between 1 and 100.";
-    if (!quiz.studentIds.length) next.studentIds = "Assign at least one student to this exam.";
     if (!questions.length) next.questions = "Add at least one question before creating the quiz.";
     setErrors(next);
     return next;
@@ -601,7 +600,7 @@ export default function AdminPage({ session, onLogout, setMessage }) {
           <div className="task-intro">
             <p className="eyebrow">Use Case Two</p>
             <h3>Prepare Quiz</h3>
-            <p>Configure exam timing, assign students from the registered list, and build each question through form fields instead of JSON.</p>
+            <p>Configure exam timing, optionally assign students from the registered list, and build each question through form fields instead of JSON.</p>
           </div>
 
           <form className="task-card" onSubmit={handleQuizCreate}>
@@ -618,7 +617,7 @@ export default function AdminPage({ session, onLogout, setMessage }) {
                 <div className="student-assignment-header">
                   <div>
                     <strong>Choose registered students</strong>
-                    <p className="info-line">Only active, email-verified students can be assigned to an exam.</p>
+                    <p className="info-line">Only active, email-verified students can be assigned to an exam, and you can skip this step if you want to assign them later.</p>
                   </div>
                   <button type="button" className="secondary-button" onClick={loadStudents}>Refresh Students</button>
                 </div>
@@ -688,8 +687,6 @@ export default function AdminPage({ session, onLogout, setMessage }) {
                     )}
                   </aside>
                 </div>
-
-                {errors.studentIds ? <p className="inline-error">{errors.studentIds}</p> : null}
               </div>
             </div>
 
