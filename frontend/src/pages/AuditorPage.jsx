@@ -186,7 +186,7 @@ export default function AuditorPage({ session, onLogout, setMessage }) {
       </div>
 
       <div className="task-card">
-        <div className="task-card-header"><h3>Stored Documents</h3><span className="info-line">S3-backed scanned scripts, reports, and integrity evidence for this exam</span></div>
+        <div className="task-card-header"><h3>Stored Documents</h3><span className="info-line">S3-backed result reports and integrity evidence for this exam</span></div>
         {!storageConfigured ? <p className="info-line">S3 storage is not configured on the backend yet.</p> : <div className="audit-table-wrap">
           <table className="audit-table">
             <thead>
