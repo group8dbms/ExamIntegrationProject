@@ -22,9 +22,17 @@ function formatDetails(details) {
   return entries.map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : String(value)}`).join(" | ");
 }
 
+function getCaseDisplayStatus(student) {
+  if (!student?.caseId) return "Not opened";
+  if (student.caseClosedAt || ["resolved", "cleared", "confirmed_cheating"].includes(student.caseWorkflowStatus)) {
+    return "Closed";
+  }
+  return student.caseWorkflowStatus || student.caseStatus || "Open";
+}
+
 function createDecisionDraft(sessionId, student = null) {
   return {
-    status: student?.caseWorkflowStatus || "under_review",
+    status: student?.caseWorkflowStatus || "resolved",
     decision: student?.caseDecision || "manual_review",
     decisionNotes: student?.caseDecisionNotes || "",
     actionBy: sessionId,
@@ -173,9 +181,10 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
     }
 
     try {
+      const finalStatus = decisionDraft.status === "under_review" ? "resolved" : decisionDraft.status;
       await api(`/api/integrity/cases/${selectedStudent.caseId}/decision`, {
         method: "PATCH",
-        body: JSON.stringify({ ...decisionDraft, actorRole: "proctor" })
+        body: JSON.stringify({ ...decisionDraft, status: finalStatus, actorRole: "proctor" })
       });
       setMessage("Proctor decision saved for this case.");
       await loadExamLogs(selectedExamId, false);
@@ -238,7 +247,7 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
                 <span className={student.integrityScore > 0 ? "status-badge waiting" : "status-badge muted"}>Penalty total: {student.integrityScore}</span>
               </div>
               <p className="info-line">Events: {student.totalEvents} | Last seen: {formatDateTime(student.lastEventAt)}</p>
-              <p className="info-line">Case: {student.caseId ? student.caseWorkflowStatus || student.caseStatus : "Not opened"} | Decision: {student.caseDecision || "Pending"}</p>
+              <p className="info-line">Case: {getCaseDisplayStatus(student)} | Decision: {student.caseDecision || "Pending"}</p>
             </button>)}
             {!studentLogs.length && <p>No suspicious logs recorded for this exam yet.</p>}
           </div>
@@ -253,13 +262,13 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
                 <h3>{selectedStudent.studentName}</h3>
                 <p className="info-line">{selectedStudent.studentEmail}</p>
                 <p className="info-line">Manual penalty total: {selectedStudent.integrityScore} | Events logged: {selectedStudent.totalEvents}</p>
-                <p className="info-line">Latest case: {selectedStudent.caseId || "Not opened"} | Decision: {selectedStudent.caseDecision || "Pending"}</p>
+                <p className="info-line">Latest case: {selectedStudent.caseId || "Not opened"} | Status: {getCaseDisplayStatus(selectedStudent)} | Decision: {selectedStudent.caseDecision || "Pending"}</p>
               </div>
               <span className="status-badge waiting">Attempt {selectedStudent.attemptNo}</span>
             </div>
 
             <div className="form-actions">
-              <button type="button" className="secondary-button" onClick={openCaseForStudent}>{selectedStudent.caseId && !selectedStudent.caseDecision ? "Open Existing Case" : "Open Case"}</button>
+              <button type="button" className="secondary-button" onClick={openCaseForStudent}>{selectedStudent.caseId && !selectedStudent.caseClosedAt ? "Open Existing Case" : "Open Case"}</button>
             </div>
 
             <div className="question-list">
@@ -306,7 +315,7 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
             </div>
 
             <p className="info-line">Case ID: {selectedStudent.caseId || "Open a case first"}</p>
-            <p className="info-line">Opened at: {formatDateTime(selectedStudent.caseOpenedAt)} | Closed at: {formatDateTime(selectedStudent.caseClosedAt)}</p>
+            <p className="info-line">Opened at: {formatDateTime(selectedStudent.caseOpenedAt)} | Closed at: {formatDateTime(selectedStudent.caseClosedAt)} | Display status: {getCaseDisplayStatus(selectedStudent)}</p>
             <label className="field"><span>Status</span><select value={decisionDraft.status} onChange={(e) => setDecisionDraft({ ...decisionDraft, status: e.target.value })}><option value="under_review">Under Review</option><option value="cleared">Cleared</option><option value="confirmed_cheating">Confirmed Cheating</option><option value="resolved">Resolved</option></select></label>
             <label className="field"><span>Decision</span><select value={decisionDraft.decision} onChange={(e) => setDecisionDraft({ ...decisionDraft, decision: e.target.value })}><option value="manual_review">Manual Review</option><option value="warning">Warning</option><option value="no_issue">No Issue</option><option value="invalidate_exam">Invalidate Exam</option></select></label>
             <label className="field"><span>Decision Notes</span><textarea rows="6" value={decisionDraft.decisionNotes} onChange={(e) => setDecisionDraft({ ...decisionDraft, decisionNotes: e.target.value })} placeholder="Summarize the proctor decision for this case" /></label>

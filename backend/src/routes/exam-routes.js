@@ -781,7 +781,7 @@ router.post(
 
       const examMeta = await client.query(
         `
-          SELECT e.id, e.title, e.course_code
+          SELECT e.id, e.title, e.course_code, e.integrity_threshold
           FROM exam e
           WHERE e.id = $1
         `,
@@ -890,7 +890,15 @@ router.post(
           `,
           [draft.id, publishedBy]
         );
-        published.push({ ...result.rows[0], email: draft.email, fullName: draft.full_name, percentage: draft.percentage });
+        const thresholdBreached = Number(draft.integrity_score || 0) >= Number(examMeta.rows[0].integrity_threshold || 0) && Number(examMeta.rows[0].integrity_threshold || 0) > 0;
+        published.push({
+          ...result.rows[0],
+          email: draft.email,
+          fullName: draft.full_name,
+          percentage: draft.percentage,
+          thresholdBreached,
+          resultOutcome: thresholdBreached ? "Failed due to integrity threshold breach" : "Published"
+        });
       }
 
       await client.query(`UPDATE exam SET published_at = NOW(), updated_at = NOW() WHERE id = $1`, [examId]);
@@ -920,7 +928,10 @@ router.post(
               percentage: item.percentage,
               integrityScore: item.integrity_score,
               caseStatus: item.case_status,
-              submissionHashVerified: item.submission_hash_verified
+              submissionHashVerified: item.submission_hash_verified,
+              thresholdBreached: item.thresholdBreached,
+              integrityThreshold: Number(examMeta.rows[0].integrity_threshold || 0),
+              resultOutcome: item.resultOutcome
             });
           } catch (error) {
             emailIssues.push({ email: item.email, message: error.message });

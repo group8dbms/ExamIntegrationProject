@@ -33,6 +33,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   const [timeLeft, setTimeLeft] = useState(0);
   const [integrityInfo, setIntegrityInfo] = useState({ tabSwitches: 0, copyAttempts: 0, pasteAttempts: 0, ipAddress: null, integrityScore: 0, caseStatus: "clear", submissionHashVerified: false });
   const [localWarning, setLocalWarning] = useState("");
+  const [warningVersion, setWarningVersion] = useState(0);
   const autosaveRef = useRef(null);
   const timerRef = useRef(null);
   const ipPollRef = useRef(null);
@@ -55,7 +56,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     if (autosaveRef.current) window.clearInterval(autosaveRef.current);
     if (timerRef.current) window.clearInterval(timerRef.current);
     if (ipPollRef.current) window.clearInterval(ipPollRef.current);
-    window.removeEventListener("visibilitychange", handleVisibilityChange);
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
     window.removeEventListener("blur", handleWindowBlur);
     window.removeEventListener("copy", handleCopyAttempt);
     window.removeEventListener("paste", handlePasteAttempt);
@@ -84,7 +85,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
       const effectiveEnd = Math.min(endAt, maxDurationEnd);
       setTimeLeft(Math.max(0, Math.floor((effectiveEnd - now) / 1000)));
 
-      window.addEventListener("visibilitychange", handleVisibilityChange);
+      document.addEventListener("visibilitychange", handleVisibilityChange);
       window.addEventListener("blur", handleWindowBlur);
       window.addEventListener("copy", handleCopyAttempt);
       window.addEventListener("paste", handlePasteAttempt);
@@ -116,6 +117,19 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     }
   }
 
+
+  function showLocalWarning(message) {
+    setLocalWarning(message);
+    setWarningVersion((current) => current + 1);
+    if (document.visibilityState === "visible") {
+      window.setTimeout(() => {
+        if (document.visibilityState === "visible") {
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        }
+      }, 25);
+    }
+  }
+
   async function captureInitialEnvironment() {
     try {
       const ip = await fetchPublicIp();
@@ -130,7 +144,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     try {
       const latestIp = await fetchPublicIp();
       if (ipAddressRef.current && latestIp && ipAddressRef.current !== latestIp) {
-        setLocalWarning("Warning: IP change detected and logged.");
+        showLocalWarning("Warning: IP change detected and logged.");
         await logIntegrityEvent("ip_change", { previousIp: ipAddressRef.current, newIp: latestIp }, 5, latestIp);
       }
       ipAddressRef.current = latestIp;
@@ -167,7 +181,8 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
         }));
       }
       return data;
-    } catch {
+    } catch (error) {
+      console.warn("Failed to log integrity event", eventType, error);
       return null;
     }
   }
@@ -176,7 +191,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     if (document.hidden) {
       tabSwitchCountRef.current += 1;
       setIntegrityInfo((current) => ({ ...current, tabSwitches: tabSwitchCountRef.current }));
-      setLocalWarning(`Warning: tab switch detected (${tabSwitchCountRef.current}). This has been recorded.`);
+      showLocalWarning(`Warning: tab switch detected (${tabSwitchCountRef.current}). This has been recorded.`);
       void logIntegrityEvent("tab_switch", { count: tabSwitchCountRef.current, source: "visibilitychange" }, 2);
     }
   }
@@ -185,7 +200,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     if (!document.hidden) {
       tabSwitchCountRef.current += 1;
       setIntegrityInfo((current) => ({ ...current, tabSwitches: tabSwitchCountRef.current }));
-      setLocalWarning(`Warning: tab switch detected (${tabSwitchCountRef.current}). This has been recorded.`);
+      showLocalWarning(`Warning: tab switch detected (${tabSwitchCountRef.current}). This has been recorded.`);
       void logIntegrityEvent("fullscreen_exit", { count: tabSwitchCountRef.current, source: "window_blur" }, 1);
     }
   }
@@ -193,14 +208,14 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   function handleCopyAttempt() {
     copyCountRef.current += 1;
     setIntegrityInfo((current) => ({ ...current, copyAttempts: copyCountRef.current }));
-    setLocalWarning("Warning: copy attempt detected and logged.");
+    showLocalWarning("Warning: copy attempt detected and logged.");
     void logIntegrityEvent("copy_attempt", { count: copyCountRef.current }, 2);
   }
 
   function handlePasteAttempt() {
     pasteCountRef.current += 1;
     setIntegrityInfo((current) => ({ ...current, pasteAttempts: pasteCountRef.current }));
-    setLocalWarning("Warning: paste attempt detected and logged.");
+    showLocalWarning("Warning: paste attempt detected and logged.");
     void logIntegrityEvent("paste_attempt", { count: pasteCountRef.current }, 2);
   }
 
@@ -289,12 +304,18 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
         </div>
       </div>
 
-      {localWarning ? <div className="local-warning-banner"><strong>Live Warning</strong><span>{localWarning}</span></div> : null}
+      {localWarning ? <>
+        <div key={`banner-${warningVersion}`} className="local-warning-banner"><strong>Live Warning</strong><span>{localWarning}</span></div>
+        <div key={`toast-${warningVersion}`} className="local-warning-toast" role="alert" aria-live="assertive">
+          <strong>Warning recorded</strong>
+          <span>{localWarning}</span>
+        </div>
+      </> : null}
 
       <div className="exam-window-grid">
         <div className="task-card exam-guidance-card">
           <h3>Exam Rules</h3>
-          <p className="info-line">Do not switch tabs, copy, or paste. Integrity events are recorded in real time and can open a case automatically.</p>
+          <p className="info-line">Do not switch tabs, copy, or paste. Integrity events are recorded in real time and reviewed later by the proctor.</p>
           <p className="info-line">Current IP: {integrityInfo.ipAddress || "Checking..."}</p>
           <p className="info-line">Submission hash verified: {integrityInfo.submissionHashVerified ? "Yes" : "Pending final verification"}</p>
           <button type="button" className="secondary-button" onClick={() => autosaveAnswers()}>Save Progress</button>

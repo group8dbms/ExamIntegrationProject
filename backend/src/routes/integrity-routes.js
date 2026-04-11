@@ -57,7 +57,7 @@ router.get(
           ec.status,
           ec.suspicion_score,
           ec.suspicion_score AS integrity_score,
-          COALESCE(vcs.case_status, 'not_opened') AS case_status,
+          vcs.case_status AS case_status,
           COALESCE(vcs.submission_hash_verified, FALSE) AS submission_hash_verified,
           COUNT(DISTINCT ie.id) AS total_events,
           MAX(ie.event_time) AS last_event_at
@@ -104,7 +104,7 @@ router.get(
           ec.attempt_no,
           ec.status AS candidate_status,
           ec.suspicion_score,
-          COALESCE(vcs.case_status, 'not_opened') AS case_status,
+          vcs.case_status AS case_status,
           COALESCE(vcs.submission_hash_verified, FALSE) AS submission_hash_verified,
           latest_case.id AS case_id,
           latest_case.status AS case_workflow_status,
@@ -230,7 +230,7 @@ router.post(
       const candidateResult = await client.query(
         `
           SELECT ec.exam_id, ec.student_id, ec.attempt_no, ec.suspicion_score AS integrity_score,
-                 COALESCE(vcs.case_status, 'not_opened') AS case_status,
+                 vcs.case_status AS case_status,
                  COALESCE(vcs.submission_hash_verified, FALSE) AS submission_hash_verified,
                  COUNT(ie.id) AS total_events,
                  MAX(ie.event_time) AS last_event_at
@@ -248,9 +248,9 @@ router.post(
         actorRole,
         action: "integrity_event_logged",
         entityType: "integrity_event",
-        entityId: String(eventResult.rows[0].id),
+        entityId: null,
         ipAddress: req.ip,
-        details: { eventType, examId, studentId, attemptNo }
+        details: { eventId: eventResult.rows[0].id, eventType, examId, studentId, attemptNo }
       });
 
       await client.query("COMMIT");
@@ -334,7 +334,7 @@ router.post(
       const candidateResult = await client.query(
         `
           SELECT ec.exam_id, ec.student_id, ec.attempt_no, ec.suspicion_score AS integrity_score,
-                 COALESCE(vcs.case_status, 'not_opened') AS case_status,
+                 vcs.case_status AS case_status,
                  COALESCE(vcs.submission_hash_verified, FALSE) AS submission_hash_verified
           FROM exam_candidate ec
           LEFT JOIN v_candidate_integrity_summary vcs ON vcs.exam_id = ec.exam_id AND vcs.student_id = ec.student_id AND vcs.attempt_no = ec.attempt_no
@@ -348,9 +348,10 @@ router.post(
         actorRole,
         action: "integrity_penalty_assigned",
         entityType: "integrity_event",
-        entityId: String(eventId),
+        entityId: null,
         ipAddress: req.ip,
         details: {
+          eventId,
           examId: integrityEvent.exam_id,
           studentId: integrityEvent.student_id,
           attemptNo: integrityEvent.attempt_no,
@@ -405,21 +406,25 @@ router.post(
 
       const candidateScore = await client.query(
         `
-          SELECT suspicion_score
-          FROM exam_candidate
-          WHERE exam_id = $1 AND student_id = $2 AND attempt_no = $3
+          SELECT ec.suspicion_score, COALESCE(e.integrity_threshold, 0) AS integrity_threshold
+          FROM exam_candidate ec
+          JOIN exam e ON e.id = ec.exam_id
+          WHERE ec.exam_id = $1 AND ec.student_id = $2 AND ec.attempt_no = $3
         `,
         [examId, studentId, attemptNo]
       );
+
+      const currentScore = Number(candidateScore.rows[0]?.suspicion_score || 0);
+      const thresholdAtOpen = Number(candidateScore.rows[0]?.integrity_threshold || 0);
 
       const openedCase = await client.query(
         `
           INSERT INTO integrity_case (
             exam_id, student_id, attempt_no, opened_by, status, current_score, threshold_at_open, summary
-          ) VALUES ($1, $2, $3, $4, 'open', $5, NULL, $6)
+          ) VALUES ($1, $2, $3, $4, 'open', $5, $6, $7)
           RETURNING *
         `,
-        [examId, studentId, attemptNo, openedBy, Number(candidateScore.rows[0]?.suspicion_score || 0), summary || 'Case opened by proctor after reviewing suspicious activity logs.']
+        [examId, studentId, attemptNo, openedBy, currentScore, thresholdAtOpen, summary || 'Case opened by proctor after reviewing suspicious activity logs.']
       );
 
       await client.query(
@@ -536,11 +541,11 @@ router.patch(
       const caseResult = await client.query(
         `
           UPDATE integrity_case
-             SET status = $1,
+             SET status = $1::case_status,
                  decision = $2,
                  decision_notes = $3,
                  resolved_by = $4,
-                 closed_at = CASE WHEN $1 IN ('cleared', 'confirmed_cheating', 'resolved') THEN NOW() ELSE closed_at END
+                 closed_at = CASE WHEN $1::case_status IN ('cleared', 'confirmed_cheating', 'resolved') THEN NOW() ELSE closed_at END
            WHERE id = $5
            RETURNING *
         `,
