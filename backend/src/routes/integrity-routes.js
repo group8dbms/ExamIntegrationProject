@@ -2,6 +2,8 @@ const express = require("express");
 const asyncHandler = require("../middleware/async-handler");
 const pool = require("../db/pool");
 const { writeAuditLog } = require("../services/audit-service");
+const { isStorageConfigured } = require("../services/storage-service");
+const { createIntegrityEvidenceDocument } = require("../services/document-service");
 
 const router = express.Router();
 
@@ -557,6 +559,43 @@ router.patch(
         return res.status(404).json({ message: "Case not found." });
       }
 
+      const updatedCase = caseResult.rows[0];
+
+      const contextResult = await client.query(
+        `
+          SELECT
+            e.id AS exam_id,
+            e.title AS exam_title,
+            e.course_code,
+            u.id AS student_id,
+            u.full_name AS student_name,
+            u.email AS student_email
+          FROM integrity_case ic
+          JOIN exam e ON e.id = ic.exam_id
+          JOIN app_user u ON u.id = ic.student_id
+          WHERE ic.id = $1
+        `,
+        [caseId]
+      );
+
+      const eventResult = await client.query(
+        `
+          SELECT
+            ie.event_type,
+            ie.event_time,
+            ie.ip_address,
+            ie.device_fingerprint,
+            ie.details,
+            ipa.penalty_points,
+            ipa.note AS penalty_note
+          FROM integrity_event ie
+          LEFT JOIN integrity_penalty_assignment ipa ON ipa.event_id = ie.id
+          WHERE ie.exam_id = $1 AND ie.student_id = $2 AND ie.attempt_no = $3
+          ORDER BY ie.event_time ASC
+        `,
+        [updatedCase.exam_id, updatedCase.student_id, updatedCase.attempt_no]
+      );
+
       await client.query(`INSERT INTO case_action (case_id, action_type, note, action_by) VALUES ($1, 'decision', $2, $3)`, [caseId, decisionNotes || `Decision set to ${decision}`, actionBy]);
       await writeAuditLog(client, {
         actorUserId: actionBy,
@@ -568,8 +607,34 @@ router.patch(
         details: { status, decision }
       });
 
+      let storedDocument = null;
+      if (contextResult.rows.length) {
+        storedDocument = await createIntegrityEvidenceDocument(client, {
+          caseRecord: updatedCase,
+          exam: {
+            id: contextResult.rows[0].exam_id,
+            title: contextResult.rows[0].exam_title,
+            course_code: contextResult.rows[0].course_code
+          },
+          student: {
+            id: contextResult.rows[0].student_id,
+            fullName: contextResult.rows[0].student_name,
+            email: contextResult.rows[0].student_email
+          },
+          events: eventResult.rows,
+          uploadedBy: actionBy,
+          actorRole,
+          ipAddress: req.ip
+        });
+      }
+
       await client.query("COMMIT");
-      res.json(caseResult.rows[0]);
+      res.json({
+        ...updatedCase,
+        storageConfigured: isStorageConfigured(),
+        evidenceStored: Boolean(storedDocument?.stored),
+        evidenceDocumentId: storedDocument?.item?.id || null
+      });
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;

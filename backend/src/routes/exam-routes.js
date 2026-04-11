@@ -4,6 +4,8 @@ const pool = require("../db/pool");
 const { writeAuditLog } = require("../services/audit-service");
 const { scoreQuestion, calculatePenalty } = require("../services/grading-service");
 const { isMailConfigured, sendResultPublishedEmail } = require("../services/mail-service");
+const { isStorageConfigured } = require("../services/storage-service");
+const { createResultReportDocument } = require("../services/document-service");
 
 const router = express.Router();
 
@@ -878,6 +880,7 @@ router.post(
       }
 
       const published = [];
+      let storedReportsCount = 0;
       for (const draft of draftResults.rows) {
         const result = await client.query(
           `
@@ -891,14 +894,40 @@ router.post(
           [draft.id, publishedBy]
         );
         const thresholdBreached = Number(draft.integrity_score || 0) >= Number(examMeta.rows[0].integrity_threshold || 0) && Number(examMeta.rows[0].integrity_threshold || 0) > 0;
-        published.push({
+        const publishedItem = {
           ...result.rows[0],
+          studentId: draft.student_id,
           email: draft.email,
           fullName: draft.full_name,
           percentage: draft.percentage,
           thresholdBreached,
-          resultOutcome: thresholdBreached ? "Failed due to integrity threshold breach" : "Published"
+          resultOutcome: thresholdBreached ? "Failed due to integrity threshold breach" : "Published",
+          publishedAt: result.rows[0].published_at,
+          totalMarks: draft.total_marks,
+          awardedMarks: draft.awarded_marks,
+          integrityScore: draft.integrity_score,
+          caseStatus: draft.case_status,
+          submissionHashVerified: draft.submission_hash_verified
+        };
+
+        published.push(publishedItem);
+
+        const storedReport = await createResultReportDocument(client, {
+          exam: examMeta.rows[0],
+          student: {
+            id: draft.student_id,
+            fullName: draft.full_name,
+            email: draft.email
+          },
+          result: publishedItem,
+          uploadedBy: publishedBy,
+          actorRole: "admin",
+          ipAddress: req.ip
         });
+
+        if (storedReport.stored) {
+          storedReportsCount += 1;
+        }
       }
 
       await client.query(`UPDATE exam SET published_at = NOW(), updated_at = NOW() WHERE id = $1`, [examId]);
@@ -943,7 +972,9 @@ router.post(
         items: published,
         emailedCount: isMailConfigured() ? published.length - emailIssues.length : 0,
         emailIssues,
-        mailConfigured: isMailConfigured()
+        mailConfigured: isMailConfigured(),
+        storageConfigured: isStorageConfigured(),
+        storedReportsCount
       });
     } catch (error) {
       await client.query("ROLLBACK");

@@ -524,8 +524,11 @@ export default function AdminPage({ session, onLogout, setMessage }) {
       const mailNote = data.mailConfigured
         ? ` Result emails sent: ${data.emailedCount}.`
         : " SMTP is not configured, so result emails were skipped.";
+      const storageNote = data.storageConfigured
+        ? ` Auto-uploaded ${data.storedReportsCount} result report(s) to secure storage.`
+        : " Secure storage is not configured, so result reports were not uploaded.";
       const issueNote = data.emailIssues?.length ? ` ${data.emailIssues.length} email(s) failed.` : "";
-      setMessage(`Published ${data.items.length} evaluated results.${mailNote}${issueNote}`);
+      setMessage(`Published ${data.items.length} evaluated results.${mailNote}${storageNote}${issueNote}`);
       await loadExams();
     } catch (error) {
       setMessage(error.message);
@@ -959,7 +962,7 @@ export default function AdminPage({ session, onLogout, setMessage }) {
           <div className="task-intro">
             <p className="eyebrow">Use Case Three</p>
             <h3>Publish Evaluated Results</h3>
-            <p>Results stay grouped by exam. An exam becomes ready only after every assigned student has submitted, been evaluated, and any opened integrity case has a proctor decision. Publishing then emails the full group together.</p>
+            <p>Results stay grouped by exam. An exam becomes ready only after every assigned student has submitted, been evaluated, and any opened integrity case has a proctor decision. Publishing then emails the full group together and automatically stores each student result report for audit review.</p>
           </div>
 
           <form className="task-card single-column" onSubmit={handlePublish}>

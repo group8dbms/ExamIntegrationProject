@@ -182,11 +182,16 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
 
     try {
       const finalStatus = decisionDraft.status === "under_review" ? "resolved" : decisionDraft.status;
-      await api(`/api/integrity/cases/${selectedStudent.caseId}/decision`, {
+      const data = await api(`/api/integrity/cases/${selectedStudent.caseId}/decision`, {
         method: "PATCH",
         body: JSON.stringify({ ...decisionDraft, status: finalStatus, actorRole: "proctor" })
       });
-      setMessage("Proctor decision saved for this case.");
+      const storageNote = data.storageConfigured
+        ? data.evidenceStored
+          ? " Integrity evidence was uploaded automatically."
+          : " Integrity evidence could not be uploaded."
+        : " Secure storage is not configured, so no integrity evidence file was uploaded.";
+      setMessage(`Proctor decision saved for this case.${storageNote}`);
       await loadExamLogs(selectedExamId, false);
     } catch (error) {
       setMessage(error.message);
@@ -207,7 +212,7 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
       <div className="task-intro">
         <p className="eyebrow">Live Monitoring</p>
         <h3>Review Suspicious Activity Logs, Assign Penalties, and Close Case Decisions</h3>
-        <p>Only students with suspicious activity appear here. Events stay stored after the exam, and the proctor can both assign penalties and record the case decision needed before admin publishes results.</p>
+        <p>Only students with suspicious activity appear here. Events stay stored after the exam, and the proctor can both assign penalties and record the case decision needed before admin publishes results. Saving the decision also generates the integrity evidence report used by auditors.</p>
       </div>
 
       <div className="publish-grid">
