@@ -151,7 +151,7 @@ router.get(
           ec.status AS candidate_status,
           ec.suspicion_score,
           ec.suspicion_score AS integrity_score,
-          COALESCE(vcs.case_status, 'open') AS case_status,
+          COALESCE(vcs.case_status::text, 'not_opened') AS case_status,
           COALESCE(vcs.submission_hash_verified, FALSE) AS submission_hash_verified
         FROM exam_candidate ec
         JOIN exam e ON e.id = ec.exam_id
@@ -552,7 +552,7 @@ router.get(
           s.final_answers,
           s.final_submitted_at,
           ec.suspicion_score AS integrity_score,
-          COALESCE(vcs.case_status, 'open') AS case_status,
+          COALESCE(vcs.case_status::text, 'not_opened') AS case_status,
           COALESCE(vcs.submission_hash_verified, FALSE) AS submission_hash_verified,
           ev.awarded_marks,
           ev.feedback,
@@ -627,7 +627,7 @@ router.post(
             s.student_id,
             s.attempt_no,
             ec.suspicion_score AS integrity_score,
-            COALESCE(vcs.case_status, 'open') AS case_status,
+            COALESCE(vcs.case_status::text, 'not_opened') AS case_status,
             COALESCE(vcs.submission_hash_verified, FALSE) AS submission_hash_verified
           FROM answer_submission s
           JOIN exam_candidate ec ON ec.exam_id = s.exam_id AND ec.student_id = s.student_id AND ec.attempt_no = s.attempt_no
