@@ -10,6 +10,7 @@ const submissionRoutes = require("./routes/submission-routes");
 const integrityRoutes = require("./routes/integrity-routes");
 const auditRoutes = require("./routes/audit-routes");
 const documentsRoutes = require("./routes/documents-routes");
+const recheckRoutes = require("./routes/recheck-routes");
 const errorHandler = require("./middleware/error-handler");
 
 const app = express();
@@ -30,7 +31,8 @@ app.get("/", (req, res) => {
       submissions: "/api/submissions",
       integrity: "/api/integrity",
       audit: "/api/audit",
-      documents: "/api/documents"
+      documents: "/api/documents",
+      rechecks: "/api/rechecks"
     }
   });
 });
@@ -42,6 +44,7 @@ app.use("/api/submissions", submissionRoutes);
 app.use("/api/integrity", integrityRoutes);
 app.use("/api/audit", auditRoutes);
 app.use("/api/documents", documentsRoutes);
+app.use("/api/rechecks", recheckRoutes);
 
 app.use(errorHandler);
 

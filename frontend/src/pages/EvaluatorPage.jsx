@@ -28,9 +28,12 @@ export default function EvaluatorPage({ session, onLogout, setMessage }) {
   const [submissions, setSubmissions] = useState([]);
   const [selectedSubmissionId, setSelectedSubmissionId] = useState("");
   const [markForm, setMarkForm] = useState({ awardedMarks: "", feedback: "" });
+  const [recheckRequests, setRecheckRequests] = useState([]);
+  const [selectedRecheckId, setSelectedRecheckId] = useState("");
+  const [reviewForm, setReviewForm] = useState({ status: "accepted", decisionNotes: "", adjustedMarks: "" });
 
   useEffect(() => {
-    void loadExams();
+    void loadWorkspace();
   }, [session?.id]);
 
   const buckets = useMemo(() => ({
@@ -42,6 +45,11 @@ export default function EvaluatorPage({ session, onLogout, setMessage }) {
   const selectedSubmission = useMemo(
     () => submissions.find((item) => item.submissionId === selectedSubmissionId) || null,
     [selectedSubmissionId, submissions]
+  );
+
+  const selectedRecheck = useMemo(
+    () => recheckRequests.find((item) => item.id === selectedRecheckId) || null,
+    [recheckRequests, selectedRecheckId]
   );
 
   const evaluationStats = useMemo(() => ({
@@ -59,10 +67,38 @@ export default function EvaluatorPage({ session, onLogout, setMessage }) {
     }
   }, [selectedSubmission]);
 
+  useEffect(() => {
+    if (selectedRecheck) {
+      setReviewForm({
+        status: selectedRecheck.status === "requested" ? "accepted" : selectedRecheck.status,
+        decisionNotes: selectedRecheck.decisionNotes ?? "",
+        adjustedMarks: selectedRecheck.adjustedMarks ?? ""
+      });
+    }
+  }, [selectedRecheck]);
+
+  async function loadWorkspace() {
+    await Promise.all([loadExams(), loadRecheckRequests()]);
+  }
+
   async function loadExams() {
     try {
       const data = await api("/api/exams");
       setExams(data.items || []);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  async function loadRecheckRequests() {
+    try {
+      const data = await api("/api/rechecks/requests");
+      const items = data.items || [];
+      setRecheckRequests(items);
+      setSelectedRecheckId((current) => {
+        if (!items.length) return "";
+        return items.some((item) => item.id === current) ? current : items[0].id;
+      });
     } catch (error) {
       setMessage(error.message);
     }
@@ -110,7 +146,7 @@ export default function EvaluatorPage({ session, onLogout, setMessage }) {
 
       const currentSubmissionId = selectedSubmission.submissionId;
       setMessage(`Saved marks for ${selectedSubmission.studentName}. Continue with the next student in the same exam.`);
-      await loadExams();
+      await loadWorkspace();
       const data = await api(`/api/exams/${selectedExam.id}/evaluation-submissions`);
       setSelectedExam(data.exam);
       setSubmissions(data.items || []);
@@ -123,6 +159,32 @@ export default function EvaluatorPage({ session, onLogout, setMessage }) {
         awardedMarks: nextTarget?.awardedMarks ?? "",
         feedback: nextTarget?.feedback ?? ""
       });
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  async function reviewRecheck(event) {
+    event.preventDefault();
+    if (!selectedRecheck) {
+      setMessage("Choose a re-check request first.");
+      return;
+    }
+
+    try {
+      await api(`/api/rechecks/requests/${selectedRecheck.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          reviewedBy: session.id,
+          actorRole: "evaluator",
+          status: reviewForm.status,
+          decisionNotes: reviewForm.decisionNotes,
+          adjustedMarks: reviewForm.status === "adjusted" ? Number(reviewForm.adjustedMarks) : null
+        })
+      });
+
+      setMessage(`Re-check request updated for ${selectedRecheck.studentName}.`);
+      await loadWorkspace();
     } catch (error) {
       setMessage(error.message);
     }
@@ -243,6 +305,78 @@ export default function EvaluatorPage({ session, onLogout, setMessage }) {
           </> : <p>Select a student from the list to review answers and save marks.</p>}
         </div>
       </div>}
+
+      <div className="task-page task-layout-split">
+        <div className="task-card">
+          <div className="task-card-header">
+            <div>
+              <h3>Re-check Requests</h3>
+              <p className="info-line">Students can request review after published results.</p>
+            </div>
+            <button type="button" className="secondary-button" onClick={loadRecheckRequests}>Refresh</button>
+          </div>
+          <div className="list-box">
+            {recheckRequests.map((item) => <button key={item.id} type="button" className={selectedRecheckId === item.id ? "publish-card ready" : "publish-card muted"} onClick={() => setSelectedRecheckId(item.id)}>
+              <div className="publish-card-top">
+                <div>
+                  <strong>{item.studentName}</strong>
+                  <p>{item.examTitle} | {item.courseCode}</p>
+                </div>
+                <span className={item.status === "requested" ? "status-badge waiting" : item.status === "adjusted" ? "status-badge ready" : "status-badge published"}>{item.status}</span>
+              </div>
+              <p className="info-line">Current marks: {item.awardedMarks}/{item.totalMarks} | Percentage: {item.percentage}%</p>
+              <p className="info-line">Reason: {item.reason}</p>
+            </button>)}
+            {!recheckRequests.length && <p>No re-check requests have been submitted yet.</p>}
+          </div>
+        </div>
+
+        <div className="task-card">
+          {selectedRecheck ? <>
+            <div className="task-card-header">
+              <div>
+                <h3>{selectedRecheck.studentName}</h3>
+                <p className="info-line">{selectedRecheck.studentEmail}</p>
+                <p className="info-line">{selectedRecheck.examTitle} | Current marks: {selectedRecheck.awardedMarks}/{selectedRecheck.totalMarks}</p>
+              </div>
+            </div>
+
+            <div className="question-preview-card recheck-summary-card">
+              <span><strong>Reason:</strong> {selectedRecheck.reason}</span>
+              <span><strong>Integrity score:</strong> {selectedRecheck.integrityScore}</span>
+              <span><strong>Case status:</strong> {selectedRecheck.caseStatus}</span>
+              <span><strong>Hash verified:</strong> {selectedRecheck.submissionHashVerified ? "Yes" : "No"}</span>
+            </div>
+
+            <form className="single-column" onSubmit={reviewRecheck}>
+              <label className="field">
+                <span>Decision</span>
+                <select value={reviewForm.status} onChange={(event) => setReviewForm({ ...reviewForm, status: event.target.value })}>
+                  <option value="accepted">Accepted</option>
+                  <option value="rejected">Rejected</option>
+                  <option value="adjusted">Adjusted Marks</option>
+                </select>
+              </label>
+
+              {reviewForm.status === "adjusted" ? (
+                <label className="field">
+                  <span>Adjusted Marks</span>
+                  <input type="number" min="0" max={selectedRecheck.totalMarks} step="0.5" value={reviewForm.adjustedMarks} onChange={(event) => setReviewForm({ ...reviewForm, adjustedMarks: event.target.value })} required />
+                </label>
+              ) : null}
+
+              <label className="field">
+                <span>Decision Notes</span>
+                <textarea rows="5" value={reviewForm.decisionNotes} onChange={(event) => setReviewForm({ ...reviewForm, decisionNotes: event.target.value })} placeholder="Explain the review outcome." />
+              </label>
+
+              <div className="form-actions">
+                <button className="primary-button" type="submit">Save Re-check Decision</button>
+              </div>
+            </form>
+          </> : <p>Select a re-check request to review it.</p>}
+        </div>
+      </div>
     </div>
   </section>;
 }

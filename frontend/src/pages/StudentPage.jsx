@@ -24,16 +24,18 @@ function computeStartState(item) {
 
 export default function StudentPage({ session, onLogout, setMessage }) {
   const [assigned, setAssigned] = useState([]);
+  const [publishedResults, setPublishedResults] = useState([]);
+  const [recheckDrafts, setRecheckDrafts] = useState({});
 
   useEffect(() => {
-    void loadAssigned();
+    void loadWorkspace();
   }, [session?.id]);
 
   useEffect(() => {
     function handleExamSubmitted(event) {
       if (event.origin !== window.location.origin) return;
       if (event.data?.type === "student-exam-submitted") {
-        void loadAssigned();
+        void loadWorkspace();
       }
     }
 
@@ -41,11 +43,24 @@ export default function StudentPage({ session, onLogout, setMessage }) {
     return () => window.removeEventListener("message", handleExamSubmitted);
   }, [session?.id]);
 
+  async function loadWorkspace() {
+    await Promise.all([loadAssigned(), loadPublishedResults()]);
+  }
+
   async function loadAssigned() {
     try {
       const exams = await api(`/api/exams/assigned/${session.id}`);
       setAssigned(exams.items || []);
       setMessage(`Welcome ${session.fullName}. ${exams.items.length} exams assigned.`);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  async function loadPublishedResults() {
+    try {
+      const data = await api(`/api/rechecks/student/${session.id}/results`);
+      setPublishedResults(data.items || []);
     } catch (error) {
       setMessage(error.message);
     }
@@ -61,6 +76,40 @@ export default function StudentPage({ session, onLogout, setMessage }) {
     }
     popup.focus();
     setMessage("Exam window opened. Countdown and integrity monitoring start inside that window.");
+  }
+
+  async function openResultReport(documentId) {
+    try {
+      const data = await api(`/api/documents/${documentId}/access-url`);
+      window.open(data.url, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  async function requestRecheck(resultId) {
+    const reason = String(recheckDrafts[resultId] || "").trim();
+    if (!reason) {
+      setMessage("Enter a reason before requesting re-check.");
+      return;
+    }
+
+    try {
+      await api("/api/rechecks/requests", {
+        method: "POST",
+        body: JSON.stringify({
+          resultId,
+          studentId: session.id,
+          actorUserId: session.id,
+          reason
+        })
+      });
+      setRecheckDrafts((current) => ({ ...current, [resultId]: "" }));
+      setMessage("Re-check request submitted successfully.");
+      await loadPublishedResults();
+    } catch (error) {
+      setMessage(error.message);
+    }
   }
 
   const assignedCards = useMemo(
@@ -96,6 +145,71 @@ export default function StudentPage({ session, onLogout, setMessage }) {
     [assigned]
   );
 
+  const publishedResultCards = useMemo(
+    () => publishedResults.map((item) => {
+      const activeRequest = item.recheckRequest && ["requested", "accepted"].includes(item.recheckRequest.status);
+      return (
+        <div className="student-result-card" key={item.id}>
+          <div className="task-card-header">
+            <div>
+              <strong>{item.examTitle}</strong>
+              <p className="info-line">{item.courseCode}</p>
+            </div>
+            <span className={activeRequest ? "status-badge waiting" : "status-badge published"}>
+              {item.recheckRequest ? `Re-check ${item.recheckRequest.status}` : "Published"}
+            </span>
+          </div>
+
+          <div className="student-result-meta">
+            <span>Marks: {item.awardedMarks}/{item.totalMarks}</span>
+            <span>Percentage: {item.percentage}%</span>
+            <span>Integrity score: {item.integrityScore}</span>
+            <span>Case status: {item.caseStatus}</span>
+            <span>Hash verified: {item.submissionHashVerified ? "Yes" : "No"}</span>
+            <span>Outcome: {item.resultOutcome}</span>
+          </div>
+
+          <div className="student-result-actions">
+            {item.resultReportDocumentId ? (
+              <button type="button" className="secondary-button" onClick={() => openResultReport(item.resultReportDocumentId)}>
+                Open Result Report
+              </button>
+            ) : null}
+          </div>
+
+          {item.recheckRequest ? (
+            <div className="student-recheck-status">
+              <strong>Latest Re-check Request</strong>
+              <p className="info-line">Status: {item.recheckRequest.status}</p>
+              <p className="info-line">Reason: {item.recheckRequest.reason}</p>
+              {item.recheckRequest.reviewedByName ? <p className="info-line">Reviewed by: {item.recheckRequest.reviewedByName}</p> : null}
+              {item.recheckRequest.adjustedMarks !== null ? <p className="info-line">Adjusted marks: {item.recheckRequest.adjustedMarks}</p> : null}
+              {item.recheckRequest.decisionNotes ? <p className="info-line">Decision notes: {item.recheckRequest.decisionNotes}</p> : null}
+            </div>
+          ) : (
+            <div className="student-recheck-form">
+              <label className="field">
+                <span>Reason for re-check</span>
+                <textarea
+                  rows="3"
+                  value={recheckDrafts[item.id] || ""}
+                  onChange={(event) => setRecheckDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
+                  placeholder="Explain why you want this result to be reviewed."
+                />
+              </label>
+              <div className="form-actions">
+                <button type="button" className="primary-button" onClick={() => requestRecheck(item.id)}>
+                  Request Re-check
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }),
+    [publishedResults, recheckDrafts]
+  );
+
   return <section className="workspace-shell">
     <div className="workspace-header">
       <div>
@@ -106,13 +220,25 @@ export default function StudentPage({ session, onLogout, setMessage }) {
       <button type="button" className="secondary-button" onClick={onLogout}>Logout</button>
     </div>
 
-    <div className="task-page task-layout-split">
-      <div className="task-card">
-        <div className="task-card-header">
-          <h3>Assigned Exams</h3>
-          <button type="button" className="secondary-button" onClick={loadAssigned}>Refresh</button>
+      <div className="task-page task-layout-split">
+        <div className="task-card">
+          <div className="task-card-header">
+            <h3>Assigned Exams</h3>
+            <button type="button" className="secondary-button" onClick={loadWorkspace}>Refresh</button>
+          </div>
+          <div className="list-box">{assignedCards}{!assigned.length && <p>No assigned exams yet.</p>}</div>
         </div>
-        <div className="list-box">{assignedCards}{!assigned.length && <p>No assigned exams yet.</p>}</div>
+
+        <div className="task-card">
+          <div className="task-card-header">
+            <div>
+              <h3>Published Results</h3>
+              <p className="info-line">Open result reports and request re-check when needed.</p>
+            </div>
+            <button type="button" className="secondary-button" onClick={loadPublishedResults}>Refresh Results</button>
+          </div>
+          <div className="list-box">{publishedResultCards}{!publishedResults.length && <p>No published results yet.</p>}</div>
+        </div>
       </div>
 
       <div className="task-intro">
@@ -120,6 +246,5 @@ export default function StudentPage({ session, onLogout, setMessage }) {
         <h3>Start only when the exam window opens</h3>
         <p>The start button stays gray until the configured start time is reached. When it turns green, click it to open a dedicated exam window with countdown, autosave, and integrity monitoring.</p>
       </div>
-    </div>
-  </section>;
+    </section>;
 }

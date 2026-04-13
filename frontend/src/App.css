@@ -874,12 +874,42 @@ code {
   gap: 0.85rem;
 }
 
+.student-result-card,
+.recheck-summary-card {
+  border-radius: 24px;
+  border: 1px solid rgba(137, 159, 180, 0.16);
+  background: rgba(10, 18, 28, 0.92);
+  padding: 1rem 1.1rem;
+  display: grid;
+  gap: 0.85rem;
+}
+
 .student-exam-meta {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.6rem 1rem;
   color: #a8b6c8;
   font-size: 0.94rem;
+}
+
+.student-result-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem 1rem;
+  color: #a8b6c8;
+  font-size: 0.94rem;
+}
+
+.student-result-actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.student-recheck-status,
+.student-recheck-form {
+  display: grid;
+  gap: 0.75rem;
 }
 
 .start-button {
@@ -949,6 +979,7 @@ code {
 
 @media (max-width: 980px) {
   .student-exam-meta,
+  .student-result-meta,
   .exam-window-grid {
     grid-template-columns: 1fr;
   }
