@@ -275,6 +275,7 @@ Presentation-friendly PDFs:
 
 Supporting markdown files:
 - [`docs/neon-setup.md`](./docs/neon-setup.md)
+- [`docs/11-installation-and-deployment-guide.md`](./docs/11-installation-and-deployment-guide.md)
 
 ## Current Status
 
