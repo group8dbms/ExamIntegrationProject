@@ -9,6 +9,10 @@ const { createResultReportDocument } = require("../services/document-service");
 
 const router = express.Router();
 
+function normalizeResultCaseStatus(caseStatus) {
+  return caseStatus && caseStatus !== "not_opened" ? caseStatus : null;
+}
+
 async function getVerifiedStudentIds(client, studentIds) {
   if (!studentIds.length) return [];
 
@@ -109,7 +113,7 @@ async function buildEvaluatedResults(client, { examId, actorId, actorRole, ipAdd
         totalMarks,
         awardedMarks,
         submission.suspicion_score,
-        submission.case_status,
+        normalizeResultCaseStatus(submission.case_status),
         hashVerified
       ]
     );
@@ -702,7 +706,7 @@ router.post(
           totalMarks,
           parsedAwardedMarks,
           submissionMeta.rows[0].integrity_score,
-          submissionMeta.rows[0].case_status,
+          normalizeResultCaseStatus(submissionMeta.rows[0].case_status),
           submissionHashVerified
         ]
       );
