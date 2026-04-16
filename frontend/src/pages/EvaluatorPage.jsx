@@ -27,7 +27,7 @@ export default function EvaluatorPage({ session, onLogout, setMessage }) {
   const [selectedExam, setSelectedExam] = useState(null);
   const [submissions, setSubmissions] = useState([]);
   const [selectedSubmissionId, setSelectedSubmissionId] = useState("");
-  const [markForm, setMarkForm] = useState({ awardedMarks: "", feedback: "" });
+  const [markForm, setMarkForm] = useState({ awardedMarks: "", feedback: "", overrideComment: "" });
   const [recheckRequests, setRecheckRequests] = useState([]);
   const [selectedRecheckId, setSelectedRecheckId] = useState("");
   const [reviewForm, setReviewForm] = useState({ status: "accepted", decisionNotes: "", adjustedMarks: "" });
@@ -61,8 +61,9 @@ export default function EvaluatorPage({ session, onLogout, setMessage }) {
   useEffect(() => {
     if (selectedSubmission) {
       setMarkForm({
-        awardedMarks: selectedSubmission.awardedMarks ?? "",
-        feedback: selectedSubmission.feedback ?? ""
+        awardedMarks: selectedSubmission.awardedMarks ?? selectedSubmission.autoAwardedMarks ?? "",
+        feedback: selectedSubmission.feedback ?? "",
+        overrideComment: selectedSubmission.overrideComment ?? ""
       });
     }
   }, [selectedSubmission]);
@@ -114,11 +115,12 @@ export default function EvaluatorPage({ session, onLogout, setMessage }) {
       setSelectedSubmissionId(firstItem?.submissionId || "");
       if (firstItem) {
         setMarkForm({
-          awardedMarks: firstItem.awardedMarks ?? "",
-          feedback: firstItem.feedback ?? ""
+          awardedMarks: firstItem.awardedMarks ?? firstItem.autoAwardedMarks ?? "",
+          feedback: firstItem.feedback ?? "",
+          overrideComment: firstItem.overrideComment ?? ""
         });
       } else {
-        setMarkForm({ awardedMarks: "", feedback: "" });
+        setMarkForm({ awardedMarks: "", feedback: "", overrideComment: "" });
       }
       setMessage(`Loaded ${data.items.length} submitted script(s) for ${exam.title}. Choose a student to begin evaluation.`);
     } catch (error) {
@@ -140,6 +142,7 @@ export default function EvaluatorPage({ session, onLogout, setMessage }) {
           evaluatorId: session.id,
           awardedMarks: Number(markForm.awardedMarks),
           feedback: markForm.feedback,
+          overrideComment: markForm.overrideComment,
           rubricBreakdown: {}
         })
       });
@@ -156,8 +159,9 @@ export default function EvaluatorPage({ session, onLogout, setMessage }) {
       const nextTarget = nextPending || refreshedCurrent || data.items?.[0];
       setSelectedSubmissionId(nextTarget?.submissionId || "");
       setMarkForm({
-        awardedMarks: nextTarget?.awardedMarks ?? "",
-        feedback: nextTarget?.feedback ?? ""
+        awardedMarks: nextTarget?.awardedMarks ?? nextTarget?.autoAwardedMarks ?? "",
+        feedback: nextTarget?.feedback ?? "",
+        overrideComment: nextTarget?.overrideComment ?? ""
       });
     } catch (error) {
       setMessage(error.message);
@@ -294,11 +298,28 @@ export default function EvaluatorPage({ session, onLogout, setMessage }) {
                 <span className="info-line">{answer.questionType.toUpperCase()} | Max marks: {answer.maxMarks}</span>
                 <span><strong>Student answer:</strong> {formatAnswer(answer.studentAnswer)}</span>
                 <span><strong>Expected answer:</strong> {formatAnswer(answer.correctAnswer)}</span>
+                <span>
+                  <strong>Auto marks:</strong> {answer.autoAwardedMarks}/{answer.maxMarks}
+                  {answer.autoScored ? (answer.autoMatched ? " | Exact match" : " | No exact match") : " | Manual review"}
+                </span>
               </div>)}
             </div>
 
             <form className="single-column" onSubmit={saveEvaluation}>
+              <div className="question-preview-card recheck-summary-card">
+                <span><strong>Auto total:</strong> {selectedSubmission.autoAwardedMarks}/{selectedSubmission.totalMarks}</span>
+                <span><strong>Saved total:</strong> {selectedSubmission.awardedMarks ?? selectedSubmission.autoAwardedMarks}/{selectedSubmission.totalMarks}</span>
+                <button type="button" className="secondary-button" onClick={() => setMarkForm((current) => ({ ...current, awardedMarks: selectedSubmission.autoAwardedMarks, overrideComment: "" }))}>
+                  Use Auto Total
+                </button>
+              </div>
               <label className="field"><span>Awarded Marks</span><input type="number" min="0" max={selectedSubmission.totalMarks} step="0.5" value={markForm.awardedMarks} onChange={(event) => setMarkForm({ ...markForm, awardedMarks: event.target.value })} required /></label>
+              {Number(markForm.awardedMarks) !== Number(selectedSubmission.autoAwardedMarks) ? (
+                <label className="field">
+                  <span>Override Comment</span>
+                  <textarea rows="3" value={markForm.overrideComment} onChange={(event) => setMarkForm({ ...markForm, overrideComment: event.target.value })} placeholder="Explain why the final total differs from the auto-calculated MCQ/MSQ score." required />
+                </label>
+              ) : null}
               <label className="field"><span>Evaluator Feedback</span><textarea rows="5" value={markForm.feedback} onChange={(event) => setMarkForm({ ...markForm, feedback: event.target.value })} placeholder="Add evaluator remarks" /></label>
               <div className="form-actions"><button className="primary-button" type="submit">Save Marks</button></div>
             </form>

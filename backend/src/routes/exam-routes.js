@@ -266,6 +266,15 @@ function assertPublishReadiness({ exam, progress }) {
   }
 }
 
+function buildQuestionAutoEvaluation(question, answerMap) {
+  const awardedMarks = scoreQuestion(question, answerMap);
+  return {
+    awardedMarks,
+    autoMatched: awardedMarks === Number(question.marks || 0),
+    autoScored: ["mcq", "msq"].includes(question.question_type)
+  };
+}
+
 async function buildEvaluatedResults(client, { examId, actorId, actorRole, ipAddress }) {
   const examMeta = await client.query(`SELECT id, title, course_code, rules FROM exam WHERE id = $1`, [examId]);
   if (!examMeta.rows.length) {
@@ -946,6 +955,24 @@ router.get(
 
     const items = submissions.rows.map((submission) => {
       const finalAnswers = submission.final_answers || {};
+      const answers = questions.rows.map((question) => {
+        const autoEvaluation = buildQuestionAutoEvaluation(question, finalAnswers);
+        return {
+          questionId: question.id,
+          sequenceNo: question.sequence_no,
+          prompt: question.prompt,
+          questionType: question.question_type,
+          options: question.options,
+          correctAnswer: question.correct_answer,
+          maxMarks: Number(question.marks),
+          studentAnswer: finalAnswers[question.id] ?? (question.question_type === "msq" ? [] : ""),
+          autoAwardedMarks: autoEvaluation.awardedMarks,
+          autoMatched: autoEvaluation.autoMatched,
+          autoScored: autoEvaluation.autoScored
+        };
+      });
+      const autoAwardedMarks = answers.reduce((sum, answer) => sum + Number(answer.autoAwardedMarks || 0), 0);
+      const overrideComment = submission.rubric_breakdown?.overrideComment || "";
       return {
         submissionId: submission.submission_id,
         studentId: submission.student_id,
@@ -957,20 +984,13 @@ router.get(
         caseStatus: submission.case_status,
         submissionHashVerified: submission.submission_hash_verified,
         awardedMarks: submission.awarded_marks,
+        autoAwardedMarks,
         feedback: submission.feedback || "",
         rubricBreakdown: submission.rubric_breakdown || {},
+        overrideComment,
         evaluatedAt: submission.evaluated_at,
         totalMarks,
-        answers: questions.rows.map((question) => ({
-          questionId: question.id,
-          sequenceNo: question.sequence_no,
-          prompt: question.prompt,
-          questionType: question.question_type,
-          options: question.options,
-          correctAnswer: question.correct_answer,
-          maxMarks: Number(question.marks),
-          studentAnswer: finalAnswers[question.id] ?? (question.question_type === 'msq' ? [] : '')
-        }))
+        answers
       };
     });
 
@@ -984,7 +1004,7 @@ router.post(
   requireRole("evaluator"),
   asyncHandler(async (req, res) => {
     const { examId, submissionId } = req.params;
-    const { awardedMarks, feedback = "", rubricBreakdown = {} } = req.body;
+    const { awardedMarks, feedback = "", rubricBreakdown = {}, overrideComment = "" } = req.body;
     const evaluatorId = req.user.id;
 
     if (awardedMarks === undefined || awardedMarks === null) {
@@ -1020,24 +1040,46 @@ router.post(
 
       const marksMeta = await client.query(
         `
-          SELECT COALESCE(SUM(COALESCE(eq.marks_override, q.default_marks)), 0) AS total_marks
+          SELECT
+            q.id,
+            q.question_type,
+            q.correct_answer,
+            COALESCE(eq.marks_override, q.default_marks) AS marks,
+            s.final_answers
           FROM exam_question eq
           JOIN question q ON q.id = eq.question_id
+          JOIN answer_submission s ON s.id = $2
           WHERE eq.exam_id = $1
         `,
-        [examId]
+        [examId, submissionId]
       );
 
-      const totalMarks = Number(marksMeta.rows[0].total_marks || 0);
+      const totalMarks = marksMeta.rows.reduce((sum, row) => sum + Number(row.marks || 0), 0);
       const parsedAwardedMarks = Number(awardedMarks);
+      const finalAnswers = marksMeta.rows[0]?.final_answers || {};
+      const autoAwardedMarks = marksMeta.rows.reduce(
+        (sum, row) => sum + buildQuestionAutoEvaluation(row, finalAnswers).awardedMarks,
+        0
+      );
+      const normalizedOverrideComment = String(overrideComment || "").trim();
 
       if (!Number.isFinite(parsedAwardedMarks) || parsedAwardedMarks < 0 || parsedAwardedMarks > totalMarks) {
         await client.query("ROLLBACK");
         return res.status(400).json({ message: `awardedMarks must be between 0 and ${totalMarks}.` });
       }
+      if (Number(parsedAwardedMarks.toFixed(2)) !== Number(autoAwardedMarks.toFixed(2)) && !normalizedOverrideComment) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ message: "A comment is required whenever the evaluator changes the auto-calculated total." });
+      }
 
       const verifiedResult = await client.query(`SELECT verify_submission_hash($1::uuid) AS verified`, [submissionId]);
       const submissionHashVerified = verifiedResult.rows[0].verified;
+      const finalRubricBreakdown = {
+        ...(rubricBreakdown || {}),
+        autoAwardedMarks,
+        overrideComment: normalizedOverrideComment,
+        manualOverrideApplied: Number(parsedAwardedMarks.toFixed(2)) !== Number(autoAwardedMarks.toFixed(2))
+      };
 
       const evaluation = await client.query(
         `
@@ -1052,7 +1094,7 @@ router.post(
             evaluated_at = NOW()
           RETURNING *
         `,
-        [submissionId, evaluatorId, parsedAwardedMarks, feedback, JSON.stringify(rubricBreakdown)]
+        [submissionId, evaluatorId, parsedAwardedMarks, feedback, JSON.stringify(finalRubricBreakdown)]
       );
 
       const result = await client.query(
@@ -1090,7 +1132,12 @@ router.post(
         entityType: "answer_submission",
         entityId: submissionId,
         ipAddress: req.ip,
-        details: { examId, awardedMarks: parsedAwardedMarks }
+        details: {
+          examId,
+          awardedMarks: parsedAwardedMarks,
+          autoAwardedMarks,
+          manualOverrideApplied: finalRubricBreakdown.manualOverrideApplied
+        }
       });
 
       await client.query("COMMIT");
