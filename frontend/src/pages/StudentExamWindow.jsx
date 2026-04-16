@@ -115,7 +115,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
       }, 1000);
 
       autosaveRef.current = window.setInterval(() => {
-        void autosaveAnswers(seed);
+        void autosaveAnswers(answersRef.current);
       }, 15000);
 
       await captureInitialEnvironment();
