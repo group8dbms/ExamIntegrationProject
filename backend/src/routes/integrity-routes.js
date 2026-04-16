@@ -4,6 +4,7 @@ const pool = require("../db/pool");
 const { writeAuditLog } = require("../services/audit-service");
 const { isStorageConfigured } = require("../services/storage-service");
 const { createIntegrityEvidenceDocument } = require("../services/document-service");
+const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
 
@@ -13,6 +14,8 @@ function mapCaseStatus(value) {
 
 router.get(
   "/live-exams",
+  requireAuth,
+  requireRole("admin", "proctor", "auditor"),
   asyncHandler(async (req, res) => {
     const result = await pool.query(
       `
@@ -38,6 +41,8 @@ router.get(
 
 router.get(
   "/dashboard",
+  requireAuth,
+  requireRole("admin", "proctor", "auditor"),
   asyncHandler(async (req, res) => {
     const { examId } = req.query;
     const values = [];
@@ -81,6 +86,8 @@ router.get(
 
 router.get(
   "/exams/:examId/live-logs",
+  requireAuth,
+  requireRole("admin", "proctor", "auditor"),
   asyncHandler(async (req, res) => {
     const { examId } = req.params;
 
@@ -196,23 +203,25 @@ router.get(
 
 router.post(
   "/events",
+  requireAuth,
+  requireRole("student"),
   asyncHandler(async (req, res) => {
     const {
       examId,
-      studentId,
       attemptNo = 1,
       sessionId = null,
       eventType,
       weight = null,
       ipAddress = null,
       deviceFingerprint = null,
-      details = {},
-      createdBy = null,
-      actorRole = null
+      details = {}
     } = req.body;
+    const studentId = req.user.id;
+    const createdBy = req.user.id;
+    const actorRole = req.user.role;
 
-    if (!examId || !studentId || !eventType) {
-      return res.status(400).json({ message: "examId, studentId, and eventType are required." });
+    if (!examId || !eventType) {
+      return res.status(400).json({ message: "examId and eventType are required." });
     }
 
     const client = await pool.connect();
@@ -268,9 +277,13 @@ router.post(
 
 router.post(
   "/events/:eventId/penalty",
+  requireAuth,
+  requireRole("proctor"),
   asyncHandler(async (req, res) => {
     const { eventId } = req.params;
-    const { penaltyPoints, note = "", assignedBy, actorRole = "proctor" } = req.body;
+    const { penaltyPoints, note = "" } = req.body;
+    const assignedBy = req.user.id;
+    const actorRole = req.user.role;
 
     if (penaltyPoints === null || penaltyPoints === undefined || Number.isNaN(Number(penaltyPoints))) {
       return res.status(400).json({ message: "A numeric penaltyPoints value is required." });
@@ -379,8 +392,12 @@ router.post(
 
 router.post(
   "/cases/open",
+  requireAuth,
+  requireRole("proctor"),
   asyncHandler(async (req, res) => {
-    const { examId, studentId, attemptNo = 1, openedBy = null, actorRole = "proctor", summary = null } = req.body;
+    const { examId, studentId, attemptNo = 1, summary = null } = req.body;
+    const openedBy = req.user.id;
+    const actorRole = req.user.role;
 
     if (!examId || !studentId) {
       return res.status(400).json({ message: "examId and studentId are required." });
@@ -460,6 +477,8 @@ router.post(
 
 router.get(
   "/cases",
+  requireAuth,
+  requireRole("admin", "proctor", "auditor"),
   asyncHandler(async (req, res) => {
     const { status } = req.query;
     const values = [];
@@ -504,6 +523,8 @@ router.get(
 
 router.get(
   "/cases/:caseId",
+  requireAuth,
+  requireRole("admin", "proctor", "auditor"),
   asyncHandler(async (req, res) => {
     const caseResult = await pool.query(
       `
@@ -529,9 +550,14 @@ router.get(
 
 router.patch(
   "/cases/:caseId/decision",
+  requireAuth,
+  requireRole("proctor", "auditor"),
   asyncHandler(async (req, res) => {
     const { caseId } = req.params;
-    const { status, decision, decisionNotes = null, resolvedBy = null, actionBy = null, actorRole = "auditor" } = req.body;
+    const { status, decision, decisionNotes = null } = req.body;
+    const resolvedBy = req.user.id;
+    const actionBy = req.user.id;
+    const actorRole = req.user.role;
 
     if (!status || !decision) {
       return res.status(400).json({ message: "status and decision are required." });

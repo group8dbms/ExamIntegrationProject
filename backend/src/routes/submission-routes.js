@@ -1,18 +1,23 @@
-﻿const express = require("express");
+const express = require("express");
 const asyncHandler = require("../middleware/async-handler");
 const pool = require("../db/pool");
 const { writeAuditLog } = require("../services/audit-service");
+const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
 
 router.post(
   "/autosave",
+  requireAuth,
+  requireRole("student"),
   asyncHandler(async (req, res) => {
-    const { examId, studentId, attemptNo = 1, currentAnswers, actorUserId = null } = req.body;
+    const { examId, attemptNo = 1, currentAnswers } = req.body;
+    const studentId = req.user.id;
+    const actorUserId = req.user.id;
 
-    if (!examId || !studentId || !currentAnswers) {
+    if (!examId || !currentAnswers) {
       return res.status(400).json({
-        message: "examId, studentId, and currentAnswers are required."
+        message: "examId and currentAnswers are required."
       });
     }
 
@@ -20,6 +25,16 @@ router.post(
 
     try {
       await client.query("BEGIN");
+
+      const candidate = await client.query(
+        `SELECT id FROM exam_candidate WHERE exam_id = $1 AND student_id = $2 AND attempt_no = $3`,
+        [examId, studentId, attemptNo]
+      );
+
+      if (!candidate.rows.length) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ message: "Assigned exam attempt not found for this student." });
+      }
 
       const result = await client.query(
         `
@@ -44,7 +59,7 @@ router.post(
 
       await writeAuditLog(client, {
         actorUserId,
-        actorRole: actorUserId ? "student" : null,
+        actorRole: "student",
         action: "submission_autosaved",
         entityType: "answer_submission",
         entityId: result.rows[0].id,
@@ -70,12 +85,16 @@ router.post(
 
 router.post(
   "/finalize",
+  requireAuth,
+  requireRole("student"),
   asyncHandler(async (req, res) => {
-    const { examId, studentId, attemptNo = 1, finalAnswers, actorUserId = null } = req.body;
+    const { examId, attemptNo = 1, finalAnswers } = req.body;
+    const studentId = req.user.id;
+    const actorUserId = req.user.id;
 
-    if (!examId || !studentId || !finalAnswers) {
+    if (!examId || !finalAnswers) {
       return res.status(400).json({
-        message: "examId, studentId, and finalAnswers are required."
+        message: "examId and finalAnswers are required."
       });
     }
 
@@ -83,6 +102,16 @@ router.post(
 
     try {
       await client.query("BEGIN");
+
+      const candidate = await client.query(
+        `SELECT id FROM exam_candidate WHERE exam_id = $1 AND student_id = $2 AND attempt_no = $3`,
+        [examId, studentId, attemptNo]
+      );
+
+      if (!candidate.rows.length) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ message: "Assigned exam attempt not found for this student." });
+      }
 
       const submissionResult = await client.query(
         `
@@ -123,7 +152,7 @@ router.post(
 
       await writeAuditLog(client, {
         actorUserId,
-        actorRole: actorUserId ? "student" : null,
+        actorRole: "student",
         action: "submission_finalized",
         entityType: "answer_submission",
         entityId: submissionResult.rows[0].id,

@@ -5,6 +5,7 @@ const env = require("../config/env");
 const { writeAuditLog } = require("../services/audit-service");
 const { hashPassword, verifyPassword, generateToken } = require("../services/password-service");
 const { isMailConfigured, sendVerificationEmail } = require("../services/mail-service");
+const { createAuthToken } = require("../services/auth-token-service");
 
 const router = express.Router();
 
@@ -67,6 +68,10 @@ router.get(
 router.post(
   "/bootstrap-user",
   asyncHandler(async (req, res) => {
+    if (env.bootstrapSecret && req.headers["x-bootstrap-secret"] !== env.bootstrapSecret) {
+      return res.status(403).json({ message: "Bootstrap access is disabled without a valid bootstrap secret." });
+    }
+
     const { fullName, email, password, role } = req.body;
     const allowedRoles = ["admin", "proctor", "auditor", "evaluator", "instructor"];
 
@@ -199,7 +204,8 @@ router.post(
     res.json({
       mode: "login",
       message: "Login successful.",
-      user: serializeUser(user)
+      user: serializeUser(user),
+      token: createAuthToken(user)
     });
   })
 );
@@ -266,7 +272,8 @@ router.post(
 
     res.json({
       message: "Login successful.",
-      user: serializeUser(user)
+      user: serializeUser(user),
+      token: createAuthToken(user)
     });
   })
 );

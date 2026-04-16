@@ -5,6 +5,42 @@ function formatDateTime(value) {
   return new Date(value).toLocaleString();
 }
 
+function formatCaseStatus(caseStatus) {
+  switch (caseStatus) {
+    case "confirmed_cheating":
+      return "Confirmed cheating";
+    case "cleared":
+      return "Cleared";
+    case "resolved":
+      return "Case closed";
+    case "under_review":
+      return "Under review";
+    case "open":
+      return "Open";
+    case "not_opened":
+    case "clear":
+    case null:
+    case undefined:
+    case "":
+      return "No case";
+    default:
+      return String(caseStatus).replace(/_/g, " ");
+  }
+}
+
+function getResultBadge(item) {
+  if (item.caseStatus === "confirmed_cheating") {
+    return { label: "Disqualified", className: "status-badge disqualified" };
+  }
+  if (item.resultOutcome?.toLowerCase().includes("failed")) {
+    return { label: "Failed", className: "status-badge waiting" };
+  }
+  if (item.recheckRequest && ["requested", "accepted"].includes(item.recheckRequest.status)) {
+    return { label: `Re-check ${item.recheckRequest.status}`, className: "status-badge waiting" };
+  }
+  return { label: item.recheckRequest ? `Re-check ${item.recheckRequest.status}` : "Published", className: "status-badge published" };
+}
+
 function computeStartState(item) {
   const now = Date.now();
   const startAt = new Date(item.start_at).getTime();
@@ -147,7 +183,7 @@ export default function StudentPage({ session, onLogout, setMessage }) {
 
   const publishedResultCards = useMemo(
     () => publishedResults.map((item) => {
-      const activeRequest = item.recheckRequest && ["requested", "accepted"].includes(item.recheckRequest.status);
+      const badge = getResultBadge(item);
       return (
         <div className="student-result-card" key={item.id}>
           <div className="task-card-header">
@@ -155,8 +191,8 @@ export default function StudentPage({ session, onLogout, setMessage }) {
               <strong>{item.examTitle}</strong>
               <p className="info-line">{item.courseCode}</p>
             </div>
-            <span className={activeRequest ? "status-badge waiting" : "status-badge published"}>
-              {item.recheckRequest ? `Re-check ${item.recheckRequest.status}` : "Published"}
+            <span className={badge.className}>
+              {badge.label}
             </span>
           </div>
 
@@ -164,10 +200,12 @@ export default function StudentPage({ session, onLogout, setMessage }) {
             <span>Marks: {item.awardedMarks}/{item.totalMarks}</span>
             <span>Percentage: {item.percentage}%</span>
             <span>Integrity score: {item.integrityScore}</span>
-            <span>Case status: {item.caseStatus}</span>
+            <span>Case status: {formatCaseStatus(item.caseStatus)}</span>
             <span>Hash verified: {item.submissionHashVerified ? "Yes" : "No"}</span>
             <span>Outcome: {item.resultOutcome}</span>
           </div>
+
+          {item.studentNotice ? <p className="info-line">{item.studentNotice}</p> : null}
 
           <div className="student-result-actions">
             {item.resultReportDocumentId ? (

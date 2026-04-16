@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import "./App.css";
-import { api } from "./lib/api";
+import { api, clearStoredSession, getStoredSession, setStoredSession } from "./lib/api";
 import AdminPage from "./pages/AdminPage";
 import StudentPage from "./pages/StudentPage";
 import StudentExamWindow from "./pages/StudentExamWindow";
@@ -27,8 +27,6 @@ const roleTitles = {
   auditor: "Auditor Review Desk"
 };
 
-const STUDENT_SESSION_KEY = "exam-integrity-student-session";
-
 export default function App() {
   const [message, setMessage] = useState("Choose staff or student access to continue.");
   const [status, setStatus] = useState({ api: "checking", database: "checking", detail: "Verifying backend and Neon connectivity..." });
@@ -51,17 +49,22 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const storedSession = getStoredSession();
+    if (storedSession?.user) {
+      setSession(storedSession.user);
+      setCurrentRole(storedSession.user.role);
+    }
+  }, []);
+
+  useEffect(() => {
     if (examMode) {
-      const storedSession = window.localStorage.getItem(STUDENT_SESSION_KEY);
-      if (storedSession) {
-        try {
-          const parsed = JSON.parse(storedSession);
-          setSession(parsed);
-          setCurrentRole("student");
-          setMessage(`Exam window opened for ${parsed.fullName}.`);
-        } catch {
-          setMessage("Student session could not be restored for the exam window.");
-        }
+      const storedSession = getStoredSession();
+      if (storedSession?.user) {
+        setSession(storedSession.user);
+        setCurrentRole(storedSession.user.role);
+        setMessage(`Exam window opened for ${storedSession.user.fullName}.`);
+      } else {
+        setMessage("Student session could not be restored for the exam window.");
       }
     }
   }, [examMode]);
@@ -116,6 +119,7 @@ export default function App() {
 
     try {
       const data = await api("/api/auth/login", { method: "POST", body: JSON.stringify(staffLogin) });
+      setStoredSession({ user: data.user, token: data.token });
       setSession(data.user);
       setCurrentRole(data.user.role);
       setMessage(`Welcome back, ${data.user.fullName}.`);
@@ -136,9 +140,9 @@ export default function App() {
     try {
       const data = await api("/api/auth/student-access", { method: "POST", body: JSON.stringify(studentAccess) });
       if (data.mode === "login") {
+        setStoredSession({ user: data.user, token: data.token });
         setSession(data.user);
         setCurrentRole("student");
-        window.localStorage.setItem(STUDENT_SESSION_KEY, JSON.stringify(data.user));
         setMessage(`Welcome, ${data.user.fullName}.`);
         return;
       }
@@ -160,7 +164,7 @@ export default function App() {
   function handleLogout() {
     setSession(null);
     setCurrentRole(null);
-    window.localStorage.removeItem(STUDENT_SESSION_KEY);
+    clearStoredSession();
     setMessage("You have been logged out.");
   }
 

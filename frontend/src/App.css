@@ -598,6 +598,12 @@ code {
   border-color: rgba(91, 186, 255, 0.32);
 }
 
+.status-badge.disqualified {
+  color: #ffe3de;
+  background: rgba(126, 31, 31, 0.58);
+  border-color: rgba(255, 116, 96, 0.38);
+}
+
 .status-badge.muted {
   color: #c8d4df;
   background: rgba(52, 66, 80, 0.55);

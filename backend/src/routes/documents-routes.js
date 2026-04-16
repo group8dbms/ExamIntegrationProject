@@ -6,9 +6,19 @@ const pool = require("../db/pool");
 const env = require("../config/env");
 const { writeAuditLog } = require("../services/audit-service");
 const { isStorageConfigured, uploadBuffer, createDownloadUrl } = require("../services/storage-service");
+const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
 const ALLOWED_DOCUMENT_TYPES = new Set(["result_report", "integrity_evidence"]);
+
+function canAccessDocument(user, document) {
+  if (["admin", "auditor"].includes(user.role)) return true;
+  if (user.role === "proctor") return document.document_type === "integrity_evidence";
+  if (user.role === "student") {
+    return document.document_type === "result_report" && String(document.student_id) === String(user.id);
+  }
+  return false;
+}
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -23,8 +33,10 @@ function buildDocumentKey({ examId, studentId, documentType, originalName }) {
 
 router.get(
   "/",
+  requireAuth,
   asyncHandler(async (req, res) => {
-    const { examId, studentId, documentType } = req.query;
+    const { examId, documentType } = req.query;
+    const requestedStudentId = req.query.studentId;
     const values = [];
     const filters = [];
 
@@ -33,8 +45,8 @@ router.get(
       filters.push(`sd.exam_id = $${values.length}`);
     }
 
-    if (studentId) {
-      values.push(studentId);
+    if (requestedStudentId) {
+      values.push(requestedStudentId);
       filters.push(`sd.student_id = $${values.length}`);
     }
 
@@ -70,12 +82,15 @@ router.get(
       values
     );
 
-    res.json({ items: result.rows, storageConfigured: isStorageConfigured() });
+    const filteredItems = result.rows.filter((item) => canAccessDocument(req.user, item));
+    res.json({ items: filteredItems, storageConfigured: isStorageConfigured() });
   })
 );
 
 router.post(
   "/upload",
+  requireAuth,
+  requireRole("admin", "proctor"),
   upload.single("file"),
   asyncHandler(async (req, res) => {
     if (!isStorageConfigured()) {
@@ -91,9 +106,9 @@ router.post(
       studentId = null,
       caseId = null,
       documentType = "result_report",
-      uploadedBy = null,
-      actorRole = "admin"
+      actorRole = req.user.role
     } = req.body;
+    const uploadedBy = req.user.id;
 
     if (!ALLOWED_DOCUMENT_TYPES.has(documentType)) {
       return res.status(400).json({ message: "documentType must be either result_report or integrity_evidence." });
@@ -171,6 +186,7 @@ router.post(
 
 router.get(
   "/:documentId/access-url",
+  requireAuth,
   asyncHandler(async (req, res) => {
     if (!isStorageConfigured()) {
       return res.status(400).json({ message: "S3 storage is not configured yet on the backend." });
@@ -190,6 +206,17 @@ router.get(
     }
 
     const item = result.rows[0];
+    const accessMeta = await pool.query(
+      `
+        SELECT id, student_id, document_type
+        FROM stored_document
+        WHERE id = $1
+      `,
+      [req.params.documentId]
+    );
+    if (!accessMeta.rows.length || !canAccessDocument(req.user, accessMeta.rows[0])) {
+      return res.status(403).json({ message: "You do not have access to this document." });
+    }
     const url = await createDownloadUrl(item.s3_key);
     res.json({
       id: item.id,

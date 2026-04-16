@@ -27,6 +27,7 @@ export default function AuditorPage({ session, onLogout, setMessage }) {
   const [logs, setLogs] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [storageConfigured, setStorageConfigured] = useState(false);
+  const [logRoleFilter, setLogRoleFilter] = useState("all");
 
   useEffect(() => {
     void loadExamAudits();
@@ -38,6 +39,11 @@ export default function AuditorPage({ session, onLogout, setMessage }) {
     failedHashes: students.filter((item) => item.submission_id && !item.submission_hash_verified).length,
     openCases: students.filter((item) => item.case_id && !item.case_closed_at && !["resolved", "cleared", "confirmed_cheating"].includes(item.case_workflow_status)).length
   }), [students]);
+
+  const filteredLogs = useMemo(
+    () => logs.filter((item) => (logRoleFilter === "all" ? true : (item.actor_role || "system") === logRoleFilter)),
+    [logs, logRoleFilter]
+  );
 
   async function loadExamAudits() {
     try {
@@ -57,6 +63,7 @@ export default function AuditorPage({ session, onLogout, setMessage }) {
       setSelectedExam(data.exam || null);
       setStudents(data.students || []);
       setLogs(data.logs || []);
+      setLogRoleFilter("all");
       const docs = await api(`/api/documents?examId=${examId}`);
       setDocuments(docs.items || []);
       setStorageConfigured(Boolean(docs.storageConfigured));
@@ -84,6 +91,7 @@ export default function AuditorPage({ session, onLogout, setMessage }) {
     setLogs([]);
     setDocuments([]);
     setStorageConfigured(false);
+    setLogRoleFilter("all");
   }
 
   return <section className="workspace-shell">
@@ -215,7 +223,24 @@ export default function AuditorPage({ session, onLogout, setMessage }) {
       </div>
 
       <div className="task-card">
-        <div className="task-card-header"><h3>Exam Audit Logs Table</h3><span className="info-line">Exam start, submission activity, integrity reports, evaluation, and publishing trail</span></div>
+        <div className="task-card-header">
+          <div>
+            <h3>Exam Audit Logs Table</h3>
+            <span className="info-line">Exam start, submission activity, integrity reports, evaluation, and publishing trail</span>
+          </div>
+          <label className="field audit-filter-field">
+            <span>Filter By Role</span>
+            <select value={logRoleFilter} onChange={(event) => setLogRoleFilter(event.target.value)}>
+              <option value="all">All Roles</option>
+              <option value="admin">Admin</option>
+              <option value="student">Student</option>
+              <option value="proctor">Proctor</option>
+              <option value="evaluator">Evaluator</option>
+              <option value="auditor">Auditor</option>
+              <option value="system">System</option>
+            </select>
+          </label>
+        </div>
         <div className="audit-table-wrap">
           <table className="audit-table audit-log-table">
             <thead>
@@ -229,7 +254,7 @@ export default function AuditorPage({ session, onLogout, setMessage }) {
               </tr>
             </thead>
             <tbody>
-              {logs.map((item) => <tr key={item.id}>
+              {filteredLogs.map((item) => <tr key={item.id}>
                 <td>{formatDateTime(item.occurred_at)}</td>
                 <td>{formatActionLabel(item.action)}</td>
                 <td>{item.actor_role || "system"}</td>
@@ -237,7 +262,7 @@ export default function AuditorPage({ session, onLogout, setMessage }) {
                 <td>{item.ip_address || "-"}</td>
                 <td>{formatDetails(item.details)}</td>
               </tr>)}
-              {!logs.length ? <tr><td colSpan="6">No audit log entries found for this exam yet.</td></tr> : null}
+              {!filteredLogs.length ? <tr><td colSpan="6">No audit log entries match the selected role for this exam.</td></tr> : null}
             </tbody>
           </table>
         </div>

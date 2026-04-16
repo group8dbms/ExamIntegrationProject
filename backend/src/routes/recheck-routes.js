@@ -4,19 +4,33 @@ const pool = require("../db/pool");
 const { writeAuditLog } = require("../services/audit-service");
 const { isStorageConfigured } = require("../services/storage-service");
 const { createResultReportDocument } = require("../services/document-service");
+const { requireAuth, requireRole, requireSelf } = require("../middleware/auth");
 
 const router = express.Router();
 
 function buildResultOutcome(row) {
+  const caseStatus = String(row.case_status || "").toLowerCase();
+  if (caseStatus === "confirmed_cheating") {
+    return {
+      thresholdBreached: true,
+      resultOutcome: "Failed due to confirmed cheating",
+      studentNotice: "The proctor confirmed cheating for this attempt. You have been disqualified from this exam."
+    };
+  }
   const thresholdBreached = Number(row.integrity_score || 0) >= Number(row.integrity_threshold || 0) && Number(row.integrity_threshold || 0) > 0;
   return {
     thresholdBreached,
-    resultOutcome: thresholdBreached ? "Failed due to integrity threshold breach" : "Published"
+    resultOutcome: thresholdBreached ? "Failed due to integrity threshold breach" : "Published",
+    studentNotice: thresholdBreached
+      ? "Your final integrity penalty crossed the allowed threshold for this exam, so this attempt has been marked as failed."
+      : ""
   };
 }
 
 router.get(
   "/student/:studentId/results",
+  requireAuth,
+  requireSelf("studentId", { allowRoles: ["admin", "auditor"] }),
   asyncHandler(async (req, res) => {
     const { studentId } = req.params;
     const result = await pool.query(
@@ -36,6 +50,7 @@ router.get(
           e.title AS exam_title,
           e.course_code,
           e.integrity_threshold,
+          latest_case.status AS latest_case_status,
           latest_request.id AS recheck_request_id,
           latest_request.reason AS recheck_reason,
           latest_request.status AS recheck_status,
@@ -55,6 +70,14 @@ router.get(
           LIMIT 1
         ) latest_request ON TRUE
         LEFT JOIN app_user reviewer ON reviewer.id = latest_request.reviewed_by
+        LEFT JOIN LATERAL (
+          SELECT ic.status
+          FROM integrity_case ic
+          WHERE ic.exam_id = r.exam_id
+            AND ic.student_id = r.student_id
+          ORDER BY ic.closed_at DESC NULLS LAST, ic.opened_at DESC
+          LIMIT 1
+        ) latest_case ON TRUE
         LEFT JOIN LATERAL (
           SELECT sd.id
           FROM stored_document sd
@@ -82,7 +105,7 @@ router.get(
         awardedMarks: Number(row.awarded_marks),
         percentage: Number(row.percentage),
         integrityScore: Number(row.integrity_score || 0),
-        caseStatus: row.case_status || "clear",
+        caseStatus: row.latest_case_status || row.case_status || "clear",
         submissionHashVerified: Boolean(row.submission_hash_verified),
         publishedAt: row.published_at,
         resultReportDocumentId: row.result_report_document_id || null,
@@ -96,7 +119,10 @@ router.get(
           adjustedMarks: row.adjusted_marks === null || row.adjusted_marks === undefined ? null : Number(row.adjusted_marks),
           reviewedByName: row.reviewed_by_name || null
         } : null,
-        ...buildResultOutcome(row)
+        ...buildResultOutcome({
+          ...row,
+          case_status: row.latest_case_status || row.case_status
+        })
       }))
     });
   })
@@ -104,11 +130,15 @@ router.get(
 
 router.post(
   "/requests",
+  requireAuth,
+  requireRole("student"),
   asyncHandler(async (req, res) => {
-    const { resultId, studentId, reason, actorUserId = null } = req.body;
+    const { resultId, reason } = req.body;
+    const studentId = req.user.id;
+    const actorUserId = req.user.id;
 
-    if (!resultId || !studentId || !String(reason || "").trim()) {
-      return res.status(400).json({ message: "resultId, studentId, and reason are required." });
+    if (!resultId || !String(reason || "").trim()) {
+      return res.status(400).json({ message: "resultId and reason are required." });
     }
 
     const client = await pool.connect();
@@ -187,6 +217,8 @@ router.post(
 
 router.get(
   "/requests",
+  requireAuth,
+  requireRole("admin", "evaluator"),
   asyncHandler(async (req, res) => {
     const { status } = req.query;
     const values = [];
@@ -272,16 +304,16 @@ router.get(
 
 router.patch(
   "/requests/:requestId",
+  requireAuth,
+  requireRole("evaluator"),
   asyncHandler(async (req, res) => {
     const { requestId } = req.params;
-    const { status, reviewedBy, decisionNotes = "", adjustedMarks = null, actorRole = "evaluator" } = req.body;
+    const { status, decisionNotes = "", adjustedMarks = null } = req.body;
+    const reviewedBy = req.user.id;
+    const actorRole = req.user.role;
 
     if (!status || !["accepted", "rejected", "adjusted"].includes(status)) {
       return res.status(400).json({ message: "status must be accepted, rejected, or adjusted." });
-    }
-
-    if (!reviewedBy) {
-      return res.status(400).json({ message: "reviewedBy is required." });
     }
 
     const client = await pool.connect();

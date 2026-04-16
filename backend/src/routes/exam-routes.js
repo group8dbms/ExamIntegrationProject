@@ -6,11 +6,32 @@ const { scoreQuestion, calculatePenalty } = require("../services/grading-service
 const { isMailConfigured, sendResultPublishedEmail } = require("../services/mail-service");
 const { isStorageConfigured } = require("../services/storage-service");
 const { createResultReportDocument } = require("../services/document-service");
+const { requireAuth, requireRole, requireSelf } = require("../middleware/auth");
 
 const router = express.Router();
 
 function normalizeResultCaseStatus(caseStatus) {
   return caseStatus && caseStatus !== "not_opened" ? caseStatus : null;
+}
+
+function buildPublishedResultOutcome(row, integrityThreshold) {
+  const caseStatus = String(row.case_status || "").toLowerCase();
+  if (caseStatus === "confirmed_cheating") {
+    return {
+      thresholdBreached: true,
+      resultOutcome: "Failed due to confirmed cheating",
+      studentNotice: "The proctor confirmed cheating for this attempt. You have been disqualified from this exam."
+    };
+  }
+
+  const thresholdBreached = Number(row.integrity_score || 0) >= Number(integrityThreshold || 0) && Number(integrityThreshold || 0) > 0;
+  return {
+    thresholdBreached,
+    resultOutcome: thresholdBreached ? "Failed due to integrity threshold breach" : "Published",
+    studentNotice: thresholdBreached
+      ? "Your final integrity penalty crossed the allowed threshold for this exam, so this attempt has been marked as failed."
+      : ""
+  };
 }
 
 async function getVerifiedStudentIds(client, studentIds) {
@@ -140,6 +161,8 @@ async function buildEvaluatedResults(client, { examId, actorId, actorRole, ipAdd
 
 router.get(
   "/assigned/:studentId",
+  requireAuth,
+  requireSelf("studentId", { allowRoles: ["admin", "auditor"] }),
   asyncHandler(async (req, res) => {
     const result = await pool.query(
       `
@@ -172,6 +195,8 @@ router.get(
 
 router.get(
   "/:examId/candidates",
+  requireAuth,
+  requireRole("admin", "auditor"),
   asyncHandler(async (req, res) => {
     const result = await pool.query(
       `
@@ -198,12 +223,20 @@ router.get(
 
 router.get(
   "/:examId/paper",
+  requireAuth,
   asyncHandler(async (req, res) => {
     const { examId } = req.params;
-    const { studentId } = req.query;
+    const requestedStudentId = req.query.studentId;
+    const studentId = req.user.role === "student" ? req.user.id : requestedStudentId;
 
     if (!studentId) {
       return res.status(400).json({ message: "studentId is required." });
+    }
+    if (req.user.role === "student" && requestedStudentId && String(requestedStudentId) !== String(req.user.id)) {
+      return res.status(403).json({ message: "You can only access your own assigned exam paper." });
+    }
+    if (req.user.role !== "student" && !["admin", "auditor"].includes(req.user.role)) {
+      return res.status(403).json({ message: "You do not have access to this action." });
     }
 
     const examResult = await pool.query(
@@ -238,6 +271,8 @@ router.get(
 
 router.get(
   "/",
+  requireAuth,
+  requireRole("admin", "proctor", "evaluator", "auditor"),
   asyncHandler(async (req, res) => {
     const { status } = req.query;
     const values = [];
@@ -311,6 +346,8 @@ router.get(
 
 router.post(
   "/",
+  requireAuth,
+  requireRole("admin"),
   asyncHandler(async (req, res) => {
     const {
       title,
@@ -321,14 +358,14 @@ router.post(
       durationMinutes,
       integrityThreshold = 10,
       rules = {},
-      createdBy,
-      actorRole = "admin",
       questions = [],
       studentIds = []
     } = req.body;
+    const createdBy = req.user.id;
+    const actorRole = req.user.role;
 
-    if (!title || !courseCode || !startAt || !endAt || !durationMinutes || !createdBy) {
-      return res.status(400).json({ message: "title, courseCode, startAt, endAt, durationMinutes, and createdBy are required." });
+    if (!title || !courseCode || !startAt || !endAt || !durationMinutes) {
+      return res.status(400).json({ message: "title, courseCode, startAt, endAt, and durationMinutes are required." });
     }
 
     const client = await pool.connect();
@@ -419,9 +456,12 @@ router.post(
 
 router.post(
   "/:examId/candidates",
+  requireAuth,
+  requireRole("admin"),
   asyncHandler(async (req, res) => {
     const { examId } = req.params;
-    const { studentIds = [], assignedBy = null } = req.body;
+    const { studentIds = [] } = req.body;
+    const assignedBy = req.user.id;
 
     if (!studentIds.length) {
       return res.status(400).json({ message: "studentIds is required." });
@@ -474,9 +514,12 @@ router.post(
 
 router.post(
   "/:examId/candidates/remove",
+  requireAuth,
+  requireRole("admin"),
   asyncHandler(async (req, res) => {
     const { examId } = req.params;
-    const { studentIds = [], removedBy = null } = req.body;
+    const { studentIds = [] } = req.body;
+    const removedBy = req.user.id;
 
     if (!studentIds.length) {
       return res.status(400).json({ message: "studentIds is required." });
@@ -518,6 +561,8 @@ router.post(
 
 router.get(
   "/:examId/evaluation-submissions",
+  requireAuth,
+  requireRole("admin", "evaluator"),
   asyncHandler(async (req, res) => {
     const { examId } = req.params;
 
@@ -611,12 +656,15 @@ router.get(
 
 router.post(
   "/:examId/evaluations/:submissionId",
+  requireAuth,
+  requireRole("evaluator"),
   asyncHandler(async (req, res) => {
     const { examId, submissionId } = req.params;
-    const { evaluatorId, awardedMarks, feedback = "", rubricBreakdown = {} } = req.body;
+    const { awardedMarks, feedback = "", rubricBreakdown = {} } = req.body;
+    const evaluatorId = req.user.id;
 
-    if (!evaluatorId || awardedMarks === undefined || awardedMarks === null) {
-      return res.status(400).json({ message: "evaluatorId and awardedMarks are required." });
+    if (awardedMarks === undefined || awardedMarks === null) {
+      return res.status(400).json({ message: "awardedMarks is required." });
     }
 
     const client = await pool.connect();
@@ -734,13 +782,11 @@ router.post(
 
 router.post(
   "/:examId/evaluate",
+  requireAuth,
+  requireRole("evaluator"),
   asyncHandler(async (req, res) => {
     const { examId } = req.params;
-    const { evaluatorId } = req.body;
-
-    if (!evaluatorId) {
-      return res.status(400).json({ message: "evaluatorId is required." });
-    }
+    const evaluatorId = req.user.id;
 
     const client = await pool.connect();
     try {
@@ -773,13 +819,11 @@ router.post(
 
 router.post(
   "/:examId/publish-results",
+  requireAuth,
+  requireRole("admin"),
   asyncHandler(async (req, res) => {
     const { examId } = req.params;
-    const { publishedBy } = req.body;
-
-    if (!publishedBy) {
-      return res.status(400).json({ message: "publishedBy is required." });
-    }
+    const publishedBy = req.user.id;
 
     const client = await pool.connect();
     try {
@@ -897,15 +941,16 @@ router.post(
           `,
           [draft.id, publishedBy]
         );
-        const thresholdBreached = Number(draft.integrity_score || 0) >= Number(examMeta.rows[0].integrity_threshold || 0) && Number(examMeta.rows[0].integrity_threshold || 0) > 0;
+        const outcome = buildPublishedResultOutcome(draft, examMeta.rows[0].integrity_threshold);
         const publishedItem = {
           ...result.rows[0],
           studentId: draft.student_id,
           email: draft.email,
           fullName: draft.full_name,
           percentage: draft.percentage,
-          thresholdBreached,
-          resultOutcome: thresholdBreached ? "Failed due to integrity threshold breach" : "Published",
+          thresholdBreached: outcome.thresholdBreached,
+          resultOutcome: outcome.resultOutcome,
+          studentNotice: outcome.studentNotice,
           publishedAt: result.rows[0].published_at,
           totalMarks: draft.total_marks,
           awardedMarks: draft.awarded_marks,
@@ -991,6 +1036,8 @@ router.post(
 
 router.get(
   "/:examId/dashboard",
+  requireAuth,
+  requireRole("admin", "proctor", "auditor"),
   asyncHandler(async (req, res) => {
     const { examId } = req.params;
     const summary = await pool.query(

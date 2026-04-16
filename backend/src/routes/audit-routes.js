@@ -1,8 +1,11 @@
 const express = require("express");
 const asyncHandler = require("../middleware/async-handler");
 const pool = require("../db/pool");
+const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
+
+router.use(requireAuth, requireRole("admin", "auditor"));
 
 router.get(
   "/logs",
