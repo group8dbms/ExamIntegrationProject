@@ -6,6 +6,31 @@ const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
 
+async function loadAttemptContext(client, examId, studentId, attemptNo) {
+  const result = await client.query(
+    `
+      SELECT
+        ec.id,
+        ec.status,
+        ec.started_at,
+        ec.submitted_at,
+        e.start_at,
+        e.end_at,
+        e.duration_minutes
+      FROM exam_candidate ec
+      JOIN exam e ON e.id = ec.exam_id
+      WHERE ec.exam_id = $1 AND ec.student_id = $2 AND ec.attempt_no = $3
+    `,
+    [examId, studentId, attemptNo]
+  );
+
+  if (!result.rows.length) {
+    return null;
+  }
+
+  return result.rows[0];
+}
+
 router.post(
   "/autosave",
   requireAuth,
@@ -26,14 +51,51 @@ router.post(
     try {
       await client.query("BEGIN");
 
-      const candidate = await client.query(
-        `SELECT id FROM exam_candidate WHERE exam_id = $1 AND student_id = $2 AND attempt_no = $3`,
-        [examId, studentId, attemptNo]
-      );
-
-      if (!candidate.rows.length) {
+      const attempt = await loadAttemptContext(client, examId, studentId, attemptNo);
+      if (!attempt) {
         await client.query("ROLLBACK");
         return res.status(404).json({ message: "Assigned exam attempt not found for this student." });
+      }
+
+      const now = new Date();
+      if (now < new Date(attempt.start_at)) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ message: "This exam has not started yet." });
+      }
+      if (attempt.submitted_at || attempt.status === "submitted") {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ message: "This exam attempt has already been submitted." });
+      }
+
+      let startedAt = attempt.started_at;
+      if (!startedAt) {
+        if (now > new Date(attempt.end_at)) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ message: "The exam window has already closed." });
+        }
+
+        const started = await client.query(
+          `
+            UPDATE exam_candidate
+            SET started_at = NOW(),
+                status = 'in_progress'
+            WHERE exam_id = $1
+              AND student_id = $2
+              AND attempt_no = $3
+            RETURNING started_at
+          `,
+          [examId, studentId, attemptNo]
+        );
+        startedAt = started.rows[0]?.started_at || now.toISOString();
+      }
+
+      const deadline = new Date(Math.min(
+        new Date(attempt.end_at).getTime(),
+        new Date(startedAt).getTime() + Number(attempt.duration_minutes || 0) * 60 * 1000
+      ));
+      if (now > deadline) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ message: "The time limit has passed. The exam must now be finalized." });
       }
 
       const result = await client.query(
@@ -103,14 +165,35 @@ router.post(
     try {
       await client.query("BEGIN");
 
-      const candidate = await client.query(
-        `SELECT id FROM exam_candidate WHERE exam_id = $1 AND student_id = $2 AND attempt_no = $3`,
-        [examId, studentId, attemptNo]
-      );
-
-      if (!candidate.rows.length) {
+      const attempt = await loadAttemptContext(client, examId, studentId, attemptNo);
+      if (!attempt) {
         await client.query("ROLLBACK");
         return res.status(404).json({ message: "Assigned exam attempt not found for this student." });
+      }
+
+      const now = new Date();
+      if (now < new Date(attempt.start_at)) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ message: "This exam has not started yet." });
+      }
+
+      if (!attempt.started_at) {
+        if (now > new Date(attempt.end_at)) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ message: "The exam window has already closed." });
+        }
+
+        await client.query(
+          `
+            UPDATE exam_candidate
+            SET started_at = NOW(),
+                status = 'in_progress'
+            WHERE exam_id = $1
+              AND student_id = $2
+              AND attempt_no = $3
+          `,
+          [examId, studentId, attemptNo]
+        );
       }
 
       const submissionResult = await client.query(

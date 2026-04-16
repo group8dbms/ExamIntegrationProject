@@ -58,6 +58,8 @@ function formatPublishState(state) {
   switch (state) {
     case "ready_to_publish":
       return "Ready to publish";
+    case "waiting_for_admin_approval":
+      return "Waiting for admin approval";
     case "published":
       return "Published";
     case "waiting_for_evaluation":
@@ -89,6 +91,8 @@ export default function AdminPage({ session, onLogout, setMessage }) {
   const [questions, setQuestions] = useState(starterQuestions);
   const [draftQuestion, setDraftQuestion] = useState(createBlankQuestion());
   const [publishExamId, setPublishExamId] = useState("");
+  const [publishApproval, setPublishApproval] = useState(null);
+  const [publishApprovalLoading, setPublishApprovalLoading] = useState(false);
   const [activeExamId, setActiveExamId] = useState("");
   const [assignedActiveStudents, setAssignedActiveStudents] = useState([]);
   const [errors, setErrors] = useState({});
@@ -107,6 +111,15 @@ export default function AdminPage({ session, onLogout, setMessage }) {
 
     void loadAssignedActiveStudents(activeExamId);
   }, [activeExamId]);
+
+  useEffect(() => {
+    if (!publishExamId) {
+      setPublishApproval(null);
+      return;
+    }
+
+    void loadPublishApproval(publishExamId);
+  }, [publishExamId]);
 
   const minimumStartTime = useMemo(() => toDateTimeLocalInputValue(new Date()), []);
 
@@ -134,6 +147,24 @@ export default function AdminPage({ session, onLogout, setMessage }) {
       setAssignedActiveStudents(data.items || []);
     } catch (error) {
       setMessage(error.message);
+    }
+  }
+
+  async function loadPublishApproval(examId) {
+    if (!examId) {
+      setPublishApproval(null);
+      return;
+    }
+
+    setPublishApprovalLoading(true);
+    try {
+      const data = await api(`/api/exams/${examId}/publish-approval`);
+      setPublishApproval(data);
+    } catch (error) {
+      setPublishApproval(null);
+      setMessage(error.message);
+    } finally {
+      setPublishApprovalLoading(false);
     }
   }
 
@@ -386,11 +417,12 @@ export default function AdminPage({ session, onLogout, setMessage }) {
 
   const publishBuckets = useMemo(() => ({
     ready: exams.filter((item) => item.publish_state === "ready_to_publish"),
-    waiting: exams.filter((item) => item.publish_state === "waiting_for_evaluation" || item.publish_state === "waiting_for_submissions" || item.publish_state === "waiting_for_proctor_decision"),
+    waiting: exams.filter((item) => item.publish_state === "waiting_for_evaluation" || item.publish_state === "waiting_for_submissions" || item.publish_state === "waiting_for_proctor_decision" || item.publish_state === "waiting_for_admin_approval"),
     published: exams.filter((item) => item.publish_state === "published")
   }), [exams]);
 
   const activeExam = useMemo(() => exams.find((item) => item.id === activeExamId) || null, [activeExamId, exams]);
+  const selectedPublishExam = useMemo(() => exams.find((item) => item.id === publishExamId) || null, [exams, publishExamId]);
 
   async function handleFacultyAssign(event) {
     event.preventDefault();
@@ -515,6 +547,11 @@ export default function AdminPage({ session, onLogout, setMessage }) {
       return;
     }
 
+    if (!publishApproval?.canPublish) {
+      setMessage("Another admin must approve this result publication before it can be published.");
+      return;
+    }
+
     try {
       const data = await api(`/api/exams/${publishExamId.trim()}/publish-results`, {
         method: "POST",
@@ -528,7 +565,43 @@ export default function AdminPage({ session, onLogout, setMessage }) {
         : " Secure storage is not configured, so result reports were not uploaded.";
       const issueNote = data.emailIssues?.length ? ` ${data.emailIssues.length} email(s) failed.` : "";
       setMessage(`Published ${data.items.length} evaluated results.${mailNote}${storageNote}${issueNote}`);
-      await loadExams();
+      await Promise.all([loadExams(), loadPublishApproval(publishExamId.trim())]);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  async function handleRequestPublishApproval() {
+    if (!publishExamId.trim()) {
+      setMessage("Choose an exam before requesting approval.");
+      return;
+    }
+
+    try {
+      const data = await api(`/api/exams/${publishExamId.trim()}/publish-approval`, {
+        method: "POST"
+      });
+      const mailNote = data.mailConfigured ? "" : " SMTP is not configured, so email notifications were skipped.";
+      setMessage(`${data.message}${mailNote}`);
+      await Promise.all([loadExams(), loadPublishApproval(publishExamId.trim())]);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  async function handleApprovePublishRequest() {
+    const requestId = publishApproval?.approval?.id;
+    if (!requestId) {
+      setMessage("There is no pending publish approval request to approve.");
+      return;
+    }
+
+    try {
+      const data = await api(`/api/exams/publish-approval/${requestId}/approve`, {
+        method: "POST"
+      });
+      setMessage(data.message);
+      await Promise.all([loadExams(), loadPublishApproval(publishExamId.trim())]);
     } catch (error) {
       setMessage(error.message);
     }
@@ -959,13 +1032,90 @@ export default function AdminPage({ session, onLogout, setMessage }) {
           <div className="task-intro">
             <p className="eyebrow">Use Case Three</p>
             <h3>Publish Evaluated Results</h3>
-            <p>Results stay grouped by exam. An exam becomes ready only after every assigned student has submitted, been evaluated, and any opened integrity case has a proctor decision. Publishing then emails the full group together and automatically stores each student result report for audit review.</p>
+            <p>Results stay grouped by exam. An exam becomes ready only after every assigned student has submitted, been evaluated, and any opened integrity case has a proctor decision. Before publishing, one admin must request approval and a different admin must approve it. Only then can the result set be published.</p>
           </div>
 
           <form className="task-card single-column" onSubmit={handlePublish}>
-            <Field label="Ready Exam ID"><input required value={publishExamId} onChange={(event) => setPublishExamId(event.target.value)} placeholder="Choose from ready-to-publish exams below" /></Field>
-            <div className="form-actions"><button className="primary-button" type="submit">Publish Results</button></div>
+            <Field label="Selected Exam ID"><input required value={publishExamId} onChange={(event) => setPublishExamId(event.target.value)} placeholder="Choose from the exam lists below" /></Field>
+            <div className="form-actions">
+              <button type="button" className="secondary-button" onClick={handleRequestPublishApproval} disabled={!publishExamId.trim() || publishApprovalLoading || selectedPublishExam?.publish_state !== "ready_to_publish"}>
+                Request Approval
+              </button>
+              <button type="button" className="secondary-button" onClick={handleApprovePublishRequest} disabled={!publishApproval?.canApprove || publishApprovalLoading}>
+                Approve Request
+              </button>
+              <button className="primary-button" type="submit" disabled={!publishApproval?.canPublish || publishApprovalLoading}>
+                Publish Results
+              </button>
+            </div>
+            {!publishApproval?.canPublish ? <p className="info-line">Publishing stays locked until another admin approves the selected exam.</p> : null}
           </form>
+
+          {publishExamId ? (
+            <div className="task-card single-column">
+              <div className="task-card-header">
+                <div>
+                  <h3>Approval Status</h3>
+                  <span className="info-line">
+                    {selectedPublishExam ? `${selectedPublishExam.title} (${selectedPublishExam.course_code})` : "Loading selected exam"}
+                  </span>
+                </div>
+                <button type="button" className="secondary-button" onClick={() => loadPublishApproval(publishExamId)} disabled={publishApprovalLoading}>
+                  {publishApprovalLoading ? "Refreshing..." : "Refresh Approval"}
+                </button>
+              </div>
+
+              {publishApproval ? (
+                <>
+                  <div className="auditor-summary-grid">
+                    <div className="summary-tile"><span>Publish State</span><strong>{formatPublishState(selectedPublishExam?.publish_state)}</strong></div>
+                    <div className="summary-tile"><span>Approval Status</span><strong>{publishApproval.approval?.status || "not requested"}</strong></div>
+                    <div className="summary-tile"><span>Requested By</span><strong>{publishApproval.approval?.requestedByName || "-"}</strong></div>
+                    <div className="summary-tile"><span>Approved By</span><strong>{publishApproval.approval?.approvedByName || "-"}</strong></div>
+                    <div className="summary-tile"><span>Submitted / Assigned</span><strong>{publishApproval.progress?.submittedCount || 0} / {publishApproval.progress?.candidateCount || 0}</strong></div>
+                    <div className="summary-tile"><span>Evaluated / Assigned</span><strong>{publishApproval.progress?.evaluatedCount || 0} / {publishApproval.progress?.candidateCount || 0}</strong></div>
+                  </div>
+
+                  <div className="task-card">
+                    <div className="task-card-header">
+                      <h3>Admins Notified For Approval</h3>
+                      <span className="info-line">This shows exactly who received the request and whether they approved it.</span>
+                    </div>
+                    {publishApproval.approval?.recipients?.length ? (
+                      <div className="audit-table-wrap">
+                        <table className="audit-table">
+                          <thead>
+                            <tr>
+                              <th>Admin</th>
+                              <th>Email</th>
+                              <th>Status</th>
+                              <th>Notified</th>
+                              <th>Responded</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {publishApproval.approval.recipients.map((recipient) => (
+                              <tr key={recipient.id}>
+                                <td>{recipient.fullName}</td>
+                                <td>{recipient.email}</td>
+                                <td>{recipient.status}</td>
+                                <td>{recipient.notifiedAt ? new Date(recipient.notifiedAt).toLocaleString() : "-"}</td>
+                                <td>{recipient.respondedAt ? new Date(recipient.respondedAt).toLocaleString() : "-"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <p className="info-line">No approval request has been sent for this exam yet.</p>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <p className="info-line">Select an exam to load its approval state.</p>
+              )}
+            </div>
+          ) : null}
 
           <div className="publish-grid">
             <div className="task-card">
@@ -984,6 +1134,7 @@ export default function AdminPage({ session, onLogout, setMessage }) {
                       <span className="status-badge ready">{formatPublishState(item.publish_state)}</span>
                     </div>
                     <p className="info-line">Assigned: {item.candidate_count} | Submitted: {item.submitted_count} | Evaluated: {item.evaluated_count} | Open cases pending decision: {item.pending_case_decision_count} | Published: {item.published_count}</p>
+                    <p className="info-line">Approval status: {item.publish_approval_status || "not requested"}</p>
                     <button type="button" className="primary-button" onClick={() => setPublishExamId(item.id)}>Select For Publish</button>
                   </div>
                 )) : <p>No exams are ready yet.</p>}
@@ -993,7 +1144,7 @@ export default function AdminPage({ session, onLogout, setMessage }) {
             <div className="task-card">
               <div className="task-card-header">
                 <h3>Waiting Queue</h3>
-                <span className="info-line">Waiting on submissions, evaluation, or proctor decisions</span>
+                <span className="info-line">Waiting on submissions, evaluation, proctor decisions, or admin approval</span>
               </div>
               <div className="list-box">
                 {publishBuckets.waiting.length ? publishBuckets.waiting.map((item) => (
@@ -1006,6 +1157,8 @@ export default function AdminPage({ session, onLogout, setMessage }) {
                       <span className={item.publish_state === "waiting_for_submissions" ? "status-badge muted" : "status-badge waiting"}>{formatPublishState(item.publish_state)}</span>
                     </div>
                     <p className="info-line">Assigned: {item.candidate_count} | Submitted: {item.submitted_count} | Evaluated: {item.evaluated_count} | Open cases pending decision: {item.pending_case_decision_count}</p>
+                    <p className="info-line">Approval status: {item.publish_approval_status || "not requested"}</p>
+                    <button type="button" className="secondary-button" onClick={() => setPublishExamId(item.id)}>Review Approval</button>
                   </div>
                 )) : <p>No exams are waiting right now.</p>}
               </div>
@@ -1028,6 +1181,7 @@ export default function AdminPage({ session, onLogout, setMessage }) {
                     <span className="status-badge published">Published</span>
                   </div>
                   <p className="info-line">Assigned: {item.candidate_count} | Open cases: {item.opened_case_count} | Published results: {item.published_count}</p>
+                  <p className="info-line">Approval status: {item.publish_approval_status || "published"}</p>
                 </div>
               )) : <p>No published exams yet.</p>}
             </div>

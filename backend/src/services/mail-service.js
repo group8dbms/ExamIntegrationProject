@@ -77,8 +77,28 @@ async function sendResultPublishedEmail({ toEmail, toName, examTitle, courseCode
   });
 }
 
+async function sendPublishApprovalEmail({ toEmail, toName, examTitle, courseCode, requestedByName, approvalUrl = null }) {
+  const transporter = createTransporter();
+
+  await transporter.sendMail({
+    from: env.smtpFrom,
+    to: toEmail,
+    subject: `Approval needed before publishing results: ${examTitle}`,
+    html: `
+      <div style="font-family:Segoe UI,Arial,sans-serif;color:#102033;line-height:1.6">
+        <h2>Result publication approval requested</h2>
+        <p>Hello ${toName || "Admin"},</p>
+        <p>${requestedByName || "Another admin"} has requested approval to publish results for <strong>${examTitle}</strong> (${courseCode}).</p>
+        <p>Please review the exam in the admin workspace and approve the request if everything looks correct.</p>
+        ${approvalUrl ? `<p><a href="${approvalUrl}" style="display:inline-block;padding:12px 18px;background:#0f8bd7;color:#ffffff;text-decoration:none;border-radius:10px;font-weight:600">Open Admin Workspace</a></p>` : ""}
+      </div>
+    `
+  });
+}
+
 module.exports = {
   isMailConfigured,
   sendVerificationEmail,
-  sendResultPublishedEmail
+  sendResultPublishedEmail,
+  sendPublishApprovalEmail
 };

@@ -92,9 +92,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
       localStorage.setItem(ACTIVE_ATTEMPT_KEY, `${data.exam.id}:${session.id}:${data.exam.attempt_no}`);
 
       const now = Date.now();
-      const endAt = new Date(data.exam.end_at).getTime();
-      const maxDurationEnd = now + Number(data.exam.duration_minutes) * 60 * 1000;
-      const effectiveEnd = Math.min(endAt, maxDurationEnd);
+      const effectiveEnd = new Date(data.exam.effective_end_at || data.exam.end_at).getTime();
       setTimeLeft(Math.max(0, Math.floor((effectiveEnd - now) / 1000)));
 
       document.addEventListener("visibilitychange", handleVisibilityChange);

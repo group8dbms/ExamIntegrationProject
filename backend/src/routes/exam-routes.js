@@ -1,9 +1,10 @@
 const express = require("express");
 const asyncHandler = require("../middleware/async-handler");
 const pool = require("../db/pool");
+const env = require("../config/env");
 const { writeAuditLog } = require("../services/audit-service");
 const { scoreQuestion, calculatePenalty } = require("../services/grading-service");
-const { isMailConfigured, sendResultPublishedEmail } = require("../services/mail-service");
+const { isMailConfigured, sendResultPublishedEmail, sendPublishApprovalEmail } = require("../services/mail-service");
 const { isStorageConfigured } = require("../services/storage-service");
 const { createResultReportDocument } = require("../services/document-service");
 const { requireAuth, requireRole, requireSelf } = require("../middleware/auth");
@@ -47,6 +48,222 @@ async function getVerifiedStudentIds(client, studentIds) {
   );
 
   return result.rows.map((row) => row.id);
+}
+
+let publishApprovalSchemaPromise = null;
+
+async function ensurePublishApprovalSchema() {
+  if (!publishApprovalSchemaPromise) {
+    publishApprovalSchemaPromise = pool.query(`
+      CREATE TABLE IF NOT EXISTS result_publish_request (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        exam_id UUID NOT NULL REFERENCES exam(id) ON DELETE CASCADE,
+        requested_by UUID NOT NULL REFERENCES app_user(id),
+        status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'published', 'cancelled')),
+        approved_by UUID REFERENCES app_user(id),
+        approved_at TIMESTAMPTZ,
+        published_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS result_publish_request_recipient (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        request_id UUID NOT NULL REFERENCES result_publish_request(id) ON DELETE CASCADE,
+        admin_id UUID NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+        status TEXT NOT NULL CHECK (status IN ('notified', 'approved')),
+        notified_at TIMESTAMPTZ,
+        responded_at TIMESTAMPTZ,
+        UNIQUE (request_id, admin_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_publish_request_exam_created
+        ON result_publish_request(exam_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_publish_request_recipient_admin
+        ON result_publish_request_recipient(admin_id, status);
+    `);
+  }
+
+  return publishApprovalSchemaPromise;
+}
+
+async function getLatestPublishRequest(client, examId) {
+  await ensurePublishApprovalSchema();
+
+  const result = await client.query(
+    `
+      SELECT
+        r.id,
+        r.exam_id,
+        r.requested_by,
+        requester.full_name AS requested_by_name,
+        requester.email AS requested_by_email,
+        r.status,
+        r.approved_by,
+        approver.full_name AS approved_by_name,
+        approver.email AS approved_by_email,
+        r.approved_at,
+        r.published_at,
+        r.created_at,
+        r.updated_at
+      FROM result_publish_request r
+      JOIN app_user requester ON requester.id = r.requested_by
+      LEFT JOIN app_user approver ON approver.id = r.approved_by
+      WHERE r.exam_id = $1
+      ORDER BY r.created_at DESC
+      LIMIT 1
+    `,
+    [examId]
+  );
+
+  if (!result.rows.length) return null;
+
+  const request = result.rows[0];
+  const recipients = await client.query(
+    `
+      SELECT
+        rr.id,
+        rr.admin_id,
+        rr.status,
+        rr.notified_at,
+        rr.responded_at,
+        admin.full_name,
+        admin.email
+      FROM result_publish_request_recipient rr
+      JOIN app_user admin ON admin.id = rr.admin_id
+      WHERE rr.request_id = $1
+      ORDER BY admin.full_name ASC
+    `,
+    [request.id]
+  );
+
+  return {
+    id: request.id,
+    examId: request.exam_id,
+    requestedBy: request.requested_by,
+    requestedByName: request.requested_by_name,
+    requestedByEmail: request.requested_by_email,
+    status: request.status,
+    approvedBy: request.approved_by,
+    approvedByName: request.approved_by_name,
+    approvedByEmail: request.approved_by_email,
+    approvedAt: request.approved_at,
+    publishedAt: request.published_at,
+    createdAt: request.created_at,
+    updatedAt: request.updated_at,
+    recipients: recipients.rows.map((row) => ({
+      id: row.id,
+      adminId: row.admin_id,
+      fullName: row.full_name,
+      email: row.email,
+      status: row.status,
+      notifiedAt: row.notified_at,
+      respondedAt: row.responded_at
+    }))
+  };
+}
+
+async function loadPublishReadiness(client, examId) {
+  const examMeta = await client.query(
+    `
+      SELECT e.id, e.title, e.course_code, e.integrity_threshold, e.published_at
+      FROM exam e
+      WHERE e.id = $1
+    `,
+    [examId]
+  );
+
+  if (!examMeta.rows.length) {
+    const error = new Error("Exam not found.");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const examProgress = await client.query(
+    `
+      SELECT
+        COUNT(DISTINCT ec.student_id) AS candidate_count,
+        COUNT(DISTINCT s.student_id) AS submitted_count,
+        COUNT(DISTINCT CASE WHEN r.status = 'draft' THEN r.student_id END) AS evaluated_count,
+        COALESCE(cp.opened_case_count, 0) AS opened_case_count,
+        COALESCE(cp.pending_case_decision_count, 0) AS pending_case_decision_count
+      FROM exam e
+      LEFT JOIN exam_candidate ec ON ec.exam_id = e.id
+      LEFT JOIN answer_submission s ON s.exam_id = e.id AND s.final_answers IS NOT NULL
+      LEFT JOIN result r ON r.exam_id = e.id
+      LEFT JOIN (
+        SELECT
+          latest.exam_id,
+          COUNT(DISTINCT latest.student_id) AS opened_case_count,
+          COUNT(DISTINCT CASE WHEN latest.decision IS NULL THEN latest.student_id END) AS pending_case_decision_count
+        FROM (
+          SELECT DISTINCT ON (exam_id, student_id, attempt_no)
+            id,
+            exam_id,
+            student_id,
+            attempt_no,
+            decision
+          FROM integrity_case
+          ORDER BY exam_id, student_id, attempt_no, opened_at DESC
+        ) latest
+        GROUP BY latest.exam_id
+      ) cp ON cp.exam_id = e.id
+      WHERE e.id = $1
+      GROUP BY e.id, cp.opened_case_count, cp.pending_case_decision_count
+    `,
+    [examId]
+  );
+
+  const progress = examProgress.rows[0] || {
+    candidate_count: 0,
+    submitted_count: 0,
+    evaluated_count: 0,
+    opened_case_count: 0,
+    pending_case_decision_count: 0
+  };
+
+  return {
+    exam: examMeta.rows[0],
+    progress: {
+      candidateCount: Number(progress.candidate_count || 0),
+      submittedCount: Number(progress.submitted_count || 0),
+      evaluatedCount: Number(progress.evaluated_count || 0),
+      openedCaseCount: Number(progress.opened_case_count || 0),
+      pendingCaseDecisionCount: Number(progress.pending_case_decision_count || 0)
+    }
+  };
+}
+
+function assertPublishReadiness({ exam, progress }) {
+  if (exam.published_at) {
+    const error = new Error("Results for this exam have already been published.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (!progress.candidateCount) {
+    const error = new Error("Assign students to this exam before requesting or publishing results.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (progress.submittedCount < progress.candidateCount) {
+    const error = new Error("All assigned students must submit the exam before results can be published.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (progress.evaluatedCount < progress.candidateCount) {
+    const error = new Error("All assigned students in this exam must be evaluated before publishing results.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (progress.pendingCaseDecisionCount > 0) {
+    const error = new Error("Open integrity cases must have a proctor decision before results can be published.");
+    error.statusCode = 400;
+    throw error;
+  }
 }
 
 async function buildEvaluatedResults(client, { examId, actorId, actorRole, ipAddress }) {
@@ -228,6 +445,7 @@ router.get(
     const { examId } = req.params;
     const requestedStudentId = req.query.studentId;
     const studentId = req.user.role === "student" ? req.user.id : requestedStudentId;
+    const isStudentAccess = req.user.role === "student";
 
     if (!studentId) {
       return res.status(400).json({ message: "studentId is required." });
@@ -239,33 +457,128 @@ router.get(
       return res.status(403).json({ message: "You do not have access to this action." });
     }
 
-    const examResult = await pool.query(
-      `
-        SELECT e.id, e.title, e.description, e.course_code, e.start_at, e.end_at, e.duration_minutes, e.rules,
-               ec.attempt_no, ec.status AS candidate_status
-          FROM exam e
-          JOIN exam_candidate ec ON ec.exam_id = e.id
-         WHERE e.id = $1 AND ec.student_id = $2
-      `,
-      [examId, studentId]
-    );
+    const client = await pool.connect();
 
-    if (!examResult.rows.length) {
-      return res.status(404).json({ message: "Assigned exam not found for this student." });
+    try {
+      if (isStudentAccess) {
+        await client.query("BEGIN");
+      }
+
+      const examResult = await client.query(
+        `
+          SELECT e.id, e.title, e.description, e.course_code, e.start_at, e.end_at, e.duration_minutes, e.rules,
+                 ec.attempt_no, ec.status AS candidate_status, ec.started_at, ec.submitted_at
+            FROM exam e
+            JOIN exam_candidate ec ON ec.exam_id = e.id
+           WHERE e.id = $1 AND ec.student_id = $2
+        `,
+        [examId, studentId]
+      );
+
+      if (!examResult.rows.length) {
+        if (isStudentAccess) {
+          await client.query("ROLLBACK");
+        }
+        return res.status(404).json({ message: "Assigned exam not found for this student." });
+      }
+
+      const examRow = examResult.rows[0];
+      let effectiveStartedAt = examRow.started_at;
+
+      if (isStudentAccess) {
+        const now = new Date();
+        const startAt = new Date(examRow.start_at);
+        const endAt = new Date(examRow.end_at);
+
+        if (now < startAt) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ message: "This exam has not started yet." });
+        }
+
+        if (examRow.submitted_at || examRow.candidate_status === "submitted") {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ message: "This exam attempt has already been submitted." });
+        }
+
+        if (now > endAt) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ message: "The exam window has already closed." });
+        }
+
+        if (!effectiveStartedAt) {
+          const started = await client.query(
+            `
+              UPDATE exam_candidate
+              SET started_at = NOW(),
+                  status = 'in_progress'
+              WHERE exam_id = $1
+                AND student_id = $2
+                AND attempt_no = $3
+              RETURNING started_at, status
+            `,
+            [examId, studentId, examRow.attempt_no]
+          );
+          effectiveStartedAt = started.rows[0]?.started_at || now.toISOString();
+          examRow.candidate_status = started.rows[0]?.status || "in_progress";
+
+          await writeAuditLog(client, {
+            actorUserId: req.user.id,
+            actorRole: req.user.role,
+            action: "exam_window_started",
+            entityType: "exam",
+            entityId: examId,
+            ipAddress: req.ip,
+            details: { attemptNo: examRow.attempt_no, studentId }
+          });
+        }
+
+        const durationMs = Number(examRow.duration_minutes || 0) * 60 * 1000;
+        const calculatedEnd = new Date(new Date(effectiveStartedAt).getTime() + durationMs);
+        if (calculatedEnd <= now) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ message: "The time limit for this exam attempt has already passed." });
+        }
+
+        await client.query("COMMIT");
+      }
+
+      const questionResult = await client.query(
+        `
+          SELECT q.id, q.question_type, q.prompt, q.options, COALESCE(eq.marks_override, q.default_marks) AS marks, eq.sequence_no
+            FROM exam_question eq
+            JOIN question q ON q.id = eq.question_id
+           WHERE eq.exam_id = $1
+           ORDER BY eq.sequence_no ASC
+        `,
+        [examId]
+      );
+
+      const durationMs = Number(examRow.duration_minutes || 0) * 60 * 1000;
+      const startedAt = effectiveStartedAt || examRow.started_at;
+      const effectiveEndAt = startedAt
+        ? new Date(Math.min(new Date(examRow.end_at).getTime(), new Date(startedAt).getTime() + durationMs)).toISOString()
+        : examRow.end_at;
+
+      res.json({
+        exam: {
+          ...examRow,
+          started_at: startedAt,
+          effective_end_at: effectiveEndAt
+        },
+        questions: questionResult.rows
+      });
+    } catch (error) {
+      if (isStudentAccess) {
+        try {
+          await client.query("ROLLBACK");
+        } catch {
+          // Ignore rollback failures after commit.
+        }
+      }
+      throw error;
+    } finally {
+      client.release();
     }
-
-    const questionResult = await pool.query(
-      `
-        SELECT q.id, q.question_type, q.prompt, q.options, COALESCE(eq.marks_override, q.default_marks) AS marks, eq.sequence_no
-          FROM exam_question eq
-          JOIN question q ON q.id = eq.question_id
-         WHERE eq.exam_id = $1
-         ORDER BY eq.sequence_no ASC
-      `,
-      [examId]
-    );
-
-    res.json({ exam: examResult.rows[0], questions: questionResult.rows });
   })
 );
 
@@ -274,6 +587,7 @@ router.get(
   requireAuth,
   requireRole("admin", "proctor", "evaluator", "auditor"),
   asyncHandler(async (req, res) => {
+    await ensurePublishApprovalSchema();
     const { status } = req.query;
     const values = [];
     let where = "";
@@ -302,12 +616,15 @@ router.get(
           COUNT(DISTINCT CASE WHEN r.status = 'published' THEN r.student_id END) AS published_count,
           COALESCE(cp.opened_case_count, 0) AS opened_case_count,
           COALESCE(cp.pending_case_decision_count, 0) AS pending_case_decision_count,
+          latest_publish_request.status AS publish_approval_status,
+          latest_publish_request.approved_at AS publish_approved_at,
           CASE
             WHEN COUNT(DISTINCT CASE WHEN r.status = 'published' THEN r.student_id END) > 0 THEN 'published'
             WHEN COUNT(DISTINCT ec.student_id) = 0 THEN 'waiting_for_submissions'
             WHEN COUNT(DISTINCT s.student_id) < COUNT(DISTINCT ec.student_id) THEN 'waiting_for_submissions'
             WHEN COUNT(DISTINCT CASE WHEN r.status = 'draft' THEN r.student_id END) < COUNT(DISTINCT ec.student_id) THEN 'waiting_for_evaluation'
             WHEN COALESCE(cp.pending_case_decision_count, 0) > 0 THEN 'waiting_for_proctor_decision'
+            WHEN latest_publish_request.status = 'pending' THEN 'waiting_for_admin_approval'
             ELSE 'ready_to_publish'
           END AS publish_state
         FROM exam e
@@ -333,8 +650,15 @@ router.get(
           ) latest
           GROUP BY latest.exam_id
         ) cp ON cp.exam_id = e.id
+        LEFT JOIN LATERAL (
+          SELECT status, approved_at
+          FROM result_publish_request rpr
+          WHERE rpr.exam_id = e.id
+          ORDER BY rpr.created_at DESC
+          LIMIT 1
+        ) latest_publish_request ON TRUE
         ${where}
-        GROUP BY e.id, creator.full_name, cp.opened_case_count, cp.pending_case_decision_count
+        GROUP BY e.id, creator.full_name, cp.opened_case_count, cp.pending_case_decision_count, latest_publish_request.status, latest_publish_request.approved_at
         ORDER BY e.start_at DESC
       `,
       values
@@ -817,6 +1141,266 @@ router.post(
   })
 );
 
+router.get(
+  "/:examId/publish-approval",
+  requireAuth,
+  requireRole("admin"),
+  asyncHandler(async (req, res) => {
+    const { examId } = req.params;
+    const client = await pool.connect();
+
+    try {
+      const readiness = await loadPublishReadiness(client, examId);
+      const approval = await getLatestPublishRequest(client, examId);
+      const currentRecipient = approval?.recipients.find((recipient) => String(recipient.adminId) === String(req.user.id)) || null;
+
+      res.json({
+        exam: readiness.exam,
+        progress: readiness.progress,
+        approval,
+        canApprove: Boolean(
+          approval &&
+          approval.status === "pending" &&
+          currentRecipient &&
+          currentRecipient.status !== "approved" &&
+          String(approval.requestedBy) !== String(req.user.id)
+        ),
+        canPublish: Boolean(
+          approval &&
+          approval.status === "approved" &&
+          !approval.publishedAt
+        )
+      });
+    } catch (error) {
+      if (error.statusCode) {
+        return res.status(error.statusCode).json({ message: error.message });
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  })
+);
+
+router.post(
+  "/:examId/publish-approval",
+  requireAuth,
+  requireRole("admin"),
+  asyncHandler(async (req, res) => {
+    const { examId } = req.params;
+    const requesterId = req.user.id;
+    const client = await pool.connect();
+    let committed = false;
+
+    try {
+      await client.query("BEGIN");
+      await ensurePublishApprovalSchema();
+
+      const readiness = await loadPublishReadiness(client, examId);
+      assertPublishReadiness(readiness);
+
+      const admins = await client.query(
+        `
+          SELECT id, full_name, email
+          FROM app_user
+          WHERE role = 'admin' AND is_active = TRUE
+          ORDER BY full_name ASC
+        `
+      );
+
+      const recipients = admins.rows.filter((admin) => String(admin.id) !== String(requesterId));
+      if (!recipients.length) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({
+          message: "At least one other active admin is required before requesting publish approval."
+        });
+      }
+
+      const existing = await getLatestPublishRequest(client, examId);
+      if (existing && ["pending", "approved"].includes(existing.status) && !existing.publishedAt) {
+        await client.query("COMMIT");
+        return res.json({
+          approval: existing,
+          message: existing.status === "approved"
+            ? "A publish request is already approved for this exam. Results can now be published."
+            : "A publish approval request is already pending for this exam."
+        });
+      }
+
+      const requestResult = await client.query(
+        `
+          INSERT INTO result_publish_request (exam_id, requested_by, status)
+          VALUES ($1, $2, 'pending')
+          RETURNING id
+        `,
+        [examId, requesterId]
+      );
+
+      for (const recipient of recipients) {
+        await client.query(
+          `
+            INSERT INTO result_publish_request_recipient (request_id, admin_id, status, notified_at)
+            VALUES ($1, $2, 'notified', NOW())
+          `,
+          [requestResult.rows[0].id, recipient.id]
+        );
+      }
+
+      await writeAuditLog(client, {
+        actorUserId: requesterId,
+        actorRole: req.user.role,
+        action: "publish_approval_requested",
+        entityType: "exam",
+        entityId: examId,
+        ipAddress: req.ip,
+        details: { requestId: requestResult.rows[0].id, recipientCount: recipients.length }
+      });
+
+      await client.query("COMMIT");
+      committed = true;
+
+      const approval = await getLatestPublishRequest(client, examId);
+      if (isMailConfigured()) {
+        const approvalUrl = `${env.frontendUrl}/?role=admin`;
+        await Promise.all(
+          recipients.map((recipient) =>
+            sendPublishApprovalEmail({
+              toEmail: recipient.email,
+              toName: recipient.full_name,
+              examTitle: readiness.exam.title,
+              courseCode: readiness.exam.course_code,
+              requestedByName: req.user.fullName,
+              approvalUrl
+            }).catch(() => null)
+          )
+        );
+      }
+
+      res.status(201).json({
+        approval,
+        message: `Approval request sent to ${recipients.length} other admin(s).`,
+        mailConfigured: isMailConfigured()
+      });
+    } catch (error) {
+      if (!committed) {
+        await client.query("ROLLBACK");
+      }
+      if (error.statusCode) {
+        return res.status(error.statusCode).json({ message: error.message });
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  })
+);
+
+router.post(
+  "/publish-approval/:requestId/approve",
+  requireAuth,
+  requireRole("admin"),
+  asyncHandler(async (req, res) => {
+    const { requestId } = req.params;
+    const approverId = req.user.id;
+    const client = await pool.connect();
+    let committed = false;
+
+    try {
+      await client.query("BEGIN");
+      await ensurePublishApprovalSchema();
+
+      const requestResult = await client.query(
+        `
+          SELECT id, exam_id, requested_by, status, published_at
+          FROM result_publish_request
+          WHERE id = $1
+        `,
+        [requestId]
+      );
+
+      if (!requestResult.rows.length) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ message: "Publish approval request not found." });
+      }
+
+      const request = requestResult.rows[0];
+      if (String(request.requested_by) === String(approverId)) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ message: "The requesting admin cannot approve their own publish request." });
+      }
+      if (request.published_at || request.status === "published") {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ message: "This publish request has already been used." });
+      }
+      if (request.status !== "pending") {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ message: "This publish request is no longer pending approval." });
+      }
+
+      const recipientResult = await client.query(
+        `
+          SELECT id, status
+          FROM result_publish_request_recipient
+          WHERE request_id = $1 AND admin_id = $2
+        `,
+        [requestId, approverId]
+      );
+
+      if (!recipientResult.rows.length) {
+        await client.query("ROLLBACK");
+        return res.status(403).json({ message: "This approval request was not sent to your admin account." });
+      }
+
+      await client.query(
+        `
+          UPDATE result_publish_request_recipient
+          SET status = 'approved', responded_at = NOW()
+          WHERE request_id = $1 AND admin_id = $2
+        `,
+        [requestId, approverId]
+      );
+
+      await client.query(
+        `
+          UPDATE result_publish_request
+          SET status = 'approved',
+              approved_by = $2,
+              approved_at = NOW(),
+              updated_at = NOW()
+          WHERE id = $1
+        `,
+        [requestId, approverId]
+      );
+
+      await writeAuditLog(client, {
+        actorUserId: approverId,
+        actorRole: req.user.role,
+        action: "publish_approval_granted",
+        entityType: "exam",
+        entityId: request.exam_id,
+        ipAddress: req.ip,
+        details: { requestId }
+      });
+
+      await client.query("COMMIT");
+      committed = true;
+
+      const approval = await getLatestPublishRequest(client, request.exam_id);
+      res.json({
+        approval,
+        message: "Publish approval recorded. Results can now be published."
+      });
+    } catch (error) {
+      if (!committed) {
+        await client.query("ROLLBACK");
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  })
+);
+
 router.post(
   "/:examId/publish-results",
   requireAuth,
@@ -826,88 +1410,19 @@ router.post(
     const publishedBy = req.user.id;
 
     const client = await pool.connect();
+    let committed = false;
     try {
       await client.query("BEGIN");
+      const readiness = await loadPublishReadiness(client, examId);
+      assertPublishReadiness(readiness);
+      const candidateCount = readiness.progress.candidateCount;
+      const latestApproval = await getLatestPublishRequest(client, examId);
 
-      const examMeta = await client.query(
-        `
-          SELECT e.id, e.title, e.course_code, e.integrity_threshold
-          FROM exam e
-          WHERE e.id = $1
-        `,
-        [examId]
-      );
-
-      if (!examMeta.rows.length) {
+      if (!latestApproval || latestApproval.status !== "approved" || latestApproval.publishedAt) {
         await client.query("ROLLBACK");
-        return res.status(404).json({ message: "Exam not found." });
-      }
-
-      const examProgress = await client.query(
-        `
-          SELECT
-            COUNT(DISTINCT ec.student_id) AS candidate_count,
-            COUNT(DISTINCT s.student_id) AS submitted_count,
-            COUNT(DISTINCT CASE WHEN r.status = 'draft' THEN r.student_id END) AS evaluated_count,
-            COALESCE(cp.opened_case_count, 0) AS opened_case_count,
-            COALESCE(cp.pending_case_decision_count, 0) AS pending_case_decision_count
-          FROM exam e
-          LEFT JOIN exam_candidate ec ON ec.exam_id = e.id
-          LEFT JOIN answer_submission s ON s.exam_id = e.id AND s.final_answers IS NOT NULL
-          LEFT JOIN result r ON r.exam_id = e.id
-          LEFT JOIN (
-            SELECT
-              latest.exam_id,
-              COUNT(DISTINCT latest.student_id) AS opened_case_count,
-              COUNT(DISTINCT CASE WHEN latest.decision IS NULL THEN latest.student_id END) AS pending_case_decision_count
-            FROM (
-              SELECT DISTINCT ON (exam_id, student_id, attempt_no)
-                id,
-                exam_id,
-                student_id,
-                attempt_no,
-                decision
-              FROM integrity_case
-              ORDER BY exam_id, student_id, attempt_no, opened_at DESC
-            ) latest
-            GROUP BY latest.exam_id
-          ) cp ON cp.exam_id = e.id
-          WHERE e.id = $1
-          GROUP BY e.id, cp.opened_case_count, cp.pending_case_decision_count
-        `,
-        [examId]
-      );
-
-      const progress = examProgress.rows[0] || {
-        candidate_count: 0,
-        submitted_count: 0,
-        evaluated_count: 0,
-        opened_case_count: 0,
-        pending_case_decision_count: 0
-      };
-      const candidateCount = Number(progress.candidate_count || 0);
-      const submittedCount = Number(progress.submitted_count || 0);
-      const evaluatedCount = Number(progress.evaluated_count || 0);
-      const pendingCaseDecisionCount = Number(progress.pending_case_decision_count || 0);
-
-      if (!candidateCount) {
-        await client.query("ROLLBACK");
-        return res.status(400).json({ message: "Assign students to this exam before publishing results." });
-      }
-
-      if (submittedCount < candidateCount) {
-        await client.query("ROLLBACK");
-        return res.status(400).json({ message: "All assigned students must submit the exam before results can be published." });
-      }
-
-      if (evaluatedCount < candidateCount) {
-        await client.query("ROLLBACK");
-        return res.status(400).json({ message: "All assigned students in this exam must be evaluated before publishing results." });
-      }
-
-      if (pendingCaseDecisionCount > 0) {
-        await client.query("ROLLBACK");
-        return res.status(400).json({ message: "Open integrity cases must have a proctor decision before results can be published." });
+        return res.status(400).json({
+          message: "Another admin must approve result publication before results can be published."
+        });
       }
 
       const draftResults = await client.query(
@@ -941,7 +1456,7 @@ router.post(
           `,
           [draft.id, publishedBy]
         );
-        const outcome = buildPublishedResultOutcome(draft, examMeta.rows[0].integrity_threshold);
+        const outcome = buildPublishedResultOutcome(draft, readiness.exam.integrity_threshold);
         const publishedItem = {
           ...result.rows[0],
           studentId: draft.student_id,
@@ -962,7 +1477,7 @@ router.post(
         published.push(publishedItem);
 
         const storedReport = await createResultReportDocument(client, {
-          exam: examMeta.rows[0],
+          exam: readiness.exam,
           student: {
             id: draft.student_id,
             fullName: draft.full_name,
@@ -980,6 +1495,16 @@ router.post(
       }
 
       await client.query(`UPDATE exam SET published_at = NOW(), updated_at = NOW() WHERE id = $1`, [examId]);
+      await client.query(
+        `
+          UPDATE result_publish_request
+          SET status = 'published',
+              published_at = NOW(),
+              updated_at = NOW()
+          WHERE id = $1
+        `,
+        [latestApproval.id]
+      );
       await writeAuditLog(client, {
         actorUserId: publishedBy,
         actorRole: "admin",
@@ -987,10 +1512,11 @@ router.post(
         entityType: "exam",
         entityId: examId,
         ipAddress: req.ip,
-        details: { publishedCount: published.length }
+        details: { publishedCount: published.length, requestId: latestApproval.id }
       });
 
       await client.query("COMMIT");
+      committed = true;
 
       const emailIssues = [];
       if (isMailConfigured()) {
@@ -999,8 +1525,8 @@ router.post(
             await sendResultPublishedEmail({
               toEmail: item.email,
               toName: item.fullName,
-              examTitle: examMeta.rows[0].title,
-              courseCode: examMeta.rows[0].course_code,
+              examTitle: readiness.exam.title,
+              courseCode: readiness.exam.course_code,
               awardedMarks: item.awarded_marks,
               totalMarks: item.total_marks,
               percentage: item.percentage,
@@ -1008,7 +1534,7 @@ router.post(
               caseStatus: item.case_status,
               submissionHashVerified: item.submission_hash_verified,
               thresholdBreached: item.thresholdBreached,
-              integrityThreshold: Number(examMeta.rows[0].integrity_threshold || 0),
+              integrityThreshold: Number(readiness.exam.integrity_threshold || 0),
               resultOutcome: item.resultOutcome
             });
           } catch (error) {
@@ -1026,7 +1552,9 @@ router.post(
         storedReportsCount
       });
     } catch (error) {
-      await client.query("ROLLBACK");
+      if (!committed) {
+        await client.query("ROLLBACK");
+      }
       throw error;
     } finally {
       client.release();
