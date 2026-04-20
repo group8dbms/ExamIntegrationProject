@@ -1,66 +1,198 @@
 # Exam Integrity System
 
-Exam Integrity System is a role-based web platform for conducting online examinations with strong integrity controls, controlled evaluation, gated result publication, and audit-ready reporting.
+Exam Integrity System is a role-based online examination platform for managing the full exam lifecycle: exam creation, student assignment, secure attempt handling, evaluation, integrity review, result publishing, auditing, and cloud-backed document storage.
 
-The project combines:
-- exam scheduling and assignment
-- MCQ/MSQ question delivery
-- autosave and secure final submission
-- suspicious activity logging during the exam
-- proctor-led investigation workflow
-- evaluator-based marking
-- result publication with email notifications
-- audit review with submission-hash verification
-- AWS S3 storage for generated reports and integrity evidence
+It is built for institutions that want controlled online exams with accountability across `admin`, `student`, `evaluator`, `proctor`, and `auditor` roles.
 
-## Project Highlights
+## What The App Does
 
-- Dark-theme web UI with dedicated pages for `admin`, `student`, `proctor`, `evaluator`, and `auditor`
-- Student registration with verification email and auto-verification link flow
-- Admin-controlled exam creation, student assignment, and result publication
-- Suspicious event tracking such as tab switching, window focus loss, and IP-related changes
-- Proctor dashboard for penalties, case opening, and decision recording
-- Evaluator workflow for reviewing submissions and assigning marks
-- Auditor dashboard with exam-wise logs, hash verification, case details, and stored documents
-- Automatic S3 upload of:
-  - `result_report` when results are published
-  - `integrity_evidence` when a proctor saves a case decision
+- creates and manages online exams with time windows and question papers
+- assigns students and staff to exams through role-based workflows
+- allows students to take exams in a dedicated exam window with autosave and secure submission
+- logs suspicious events such as tab switches, focus loss, and attempt closure
+- lets proctors review suspicious activity, assign penalties, and close integrity cases
+- lets evaluators mark submissions and review recheck requests
+- blocks result publication until required approvals, evaluations, and integrity decisions are complete
+- sends verification and result emails
+- stores generated reports and integrity evidence in AWS S3 when configured
+- gives auditors an audit-ready view of logs, evidence, status transitions, and stored documents
 
-## User Roles
+## Main Roles
 
 ### Admin
-- logs in through the staff panel
-- creates exams and sets timing, duration, and integrity threshold
-- builds question papers using MCQ/MSQ fields
-- assigns students to active exams
-- assigns staff roles such as proctor, evaluator, and auditor
-- publishes results only after evaluation and case decisions are complete
+- assigns faculty roles such as `proctor`, `evaluator`, and `auditor`
+- creates quizzes and exams with title, course code, timing, duration, and integrity threshold
+- builds question papers using structured `MCQ` and `MSQ` fields
+- assigns students while filtering for active and email-verified users
+- reopens closed attempts through a proctor-approved reassign workflow
+- requests and approves result publication
+- publishes final results only when all rules are satisfied
 
 ### Student
-- registers if new
-- verifies account through email link
-- logs in and views assigned exams
-- starts the exam only after start time
-- answers questions with autosave support
-- submits final answers securely
-
-### Proctor
-- reviews suspicious activity logs
-- assigns penalty points to suspicious events
-- opens and manages integrity cases
-- records final case decisions
-- triggers automatic integrity evidence generation
+- registers and verifies account through email
+- views assigned exams and their current status
+- starts exams only during the valid exam window
+- answers questions in a dedicated exam window
+- benefits from background autosave and manual autosave
+- submits the final attempt securely
+- sees attempt status such as assigned, attempted, closed, submitted, graded, or not appeared
+- can request recheck after results are published when enabled
 
 ### Evaluator
-- opens submitted exams
-- reviews student answer scripts
-- assigns marks and feedback
+- opens evaluated exam queues by exam
+- reviews each student submission question by question
+- enters marks and comments
+- handles recheck review workflows
+- sees auto-evaluated no-show and closed attempts as already evaluated
+- cannot edit marks for auto-evaluated zero-mark attempts
+
+### Proctor
+- reviews flagged exams and suspicious student activity
+- sees suspicious events row-wise per student in one compact review card
+- assigns penalty points and notes to individual suspicious events
+- opens integrity cases and records proctor decisions
+- generates integrity evidence when case decisions are saved
+- approves admin requests to reopen closed or interrupted attempts
 
 ### Auditor
-- reviews exam-wise audit reports
-- checks submission hash verification
-- inspects integrity cases and outcomes
-- opens stored result and integrity evidence documents
+- reviews audit logs and exam-wise audit summaries
+- checks integrity case history and decisions
+- verifies submission hashes
+- opens stored result reports and integrity evidence documents
+- reviews workflow events for transparency and accountability
+
+## Core Functionalities
+
+### 1. Authentication And User Management
+- student self-registration
+- verification email flow with verification links
+- role-based login and dashboards
+- active/inactive and verified/unverified user filtering
+
+### 2. Exam Creation And Management
+- create exams with title and course code
+- set start time, end time, and duration
+- define integrity threshold
+- build question papers using structured forms
+- support `MCQ` and `MSQ` question types
+- preview created questions before saving
+
+### 3. Reusable Question Bank
+- stores reusable questions for future exams
+- tags questions with the course code used when they were created
+- previews question bank questions directly inside quiz creation
+- searches question bank items by prompt text and course-code tag
+- adds question bank questions directly into a new quiz
+- paginates the question bank so long banks remain usable
+
+### 4. Student Assignment
+- assign students during quiz creation
+- assign more students later to already active quizzes
+- hide already assigned students from the add-more list
+- remove assigned students when needed
+- show selected and already assigned students in compact readable lists
+
+### 5. Student Exam Window
+- dedicated exam-taking interface
+- countdown timer
+- question navigation
+- autosave in the background
+- manual `Autosave Now` action
+- manual autosave success notification shown only on manual click
+- final submission flow
+
+### 6. Attempt Safety And Closure Logic
+- detects when an exam attempt is closed unexpectedly
+- marks the attempt as `closed`
+- prevents closed attempts from being restarted automatically
+- prevents countdown restart for already closed attempts
+- keeps closure state visible in student and admin flows
+
+### 7. Suspicious Activity Monitoring
+- logs suspicious actions during the exam
+- tracks tab switches
+- tracks focus loss and exit-screen events
+- records IP-related and device-related details
+- surfaces warnings to the student in the exam window
+- preserves all events for later proctor and auditor review
+
+### 8. No-Show And Closed-Attempt Auto Evaluation
+- if the exam deadline passes and a student never appeared, the system marks the attempt as `not appeared`
+- no-show students are automatically assigned `0` marks
+- if an attempt is closed, the system can also auto-assign `0` marks
+- auto-generated zero-mark cases are marked as evaluated so result publication is not blocked
+- evaluator sees these cases as completed rather than pending
+
+### 9. Proctor Review And Integrity Cases
+- flagged exams are shown in the proctor dashboard
+- each flagged student can be reviewed with all suspicious rows in one place
+- device info and event details are shown without overflowing the UI
+- penalties can be assigned event by event
+- integrity cases can be opened, updated, and closed
+- case decisions are recorded before publishing
+
+### 10. Reassign And Reopen Workflow
+- admin gets a separate tab to review student attempts and request reopening
+- only eligible attempted or closed cases can be raised for reassign approval
+- proctor gets a separate approval queue for reassign requests
+- approved requests reset the blocked attempt and allow the same exam to be started again
+- workflow state is visible to admin and proctor
+
+### 11. Evaluation Workflow
+- evaluator opens submissions exam-wise
+- marks descriptive or manually reviewed responses
+- sees automatically handled cases correctly labeled
+- auto-evaluated `not appeared` and `closed attempt` submissions are frozen
+- frozen zero-mark submissions cannot be edited by evaluator
+
+### 12. Result Approval And Publishing
+- publication requires assignment progress, evaluation completion, and case resolution
+- one admin can request approval for publishing
+- another admin can approve publishing
+- publish button stays disabled and greyed out until approval is obtained
+- request approval remains active and highlighted when action is needed
+- publication sends result emails
+- failed outcomes are clearly reflected in result emails
+
+### 13. Student Result And Recheck Support
+- students can view published results
+- result state includes pass/fail outcomes
+- recheck workflow is available for review where supported
+
+### 14. Audit And Evidence
+- workflow actions are tracked for auditor visibility
+- integrity reports and result reports are generated
+- generated documents can be stored in S3 when configured
+- auditors can review stored document metadata and evidence trails
+- submission hash verification supports audit confidence
+
+### 15. UI And Usability Improvements
+- compact row-based proctor review cards
+- reduced overflow from long device fingerprints and metadata
+- smaller and cleaner assignment cards across admin flows
+- denser student selection, assigned lists, and reassign views
+- better readability in quiz preparation and management screens
+
+## New Functionalities Added Recently
+
+The latest round of changes added the following:
+
+- fixed the exam submit flow where the submit button was not working correctly
+- manual autosave now shows a success notification inside the exam window
+- closed attempts are blocked from restarting
+- no-show students after deadline are auto-marked as `not appeared`, assigned `0`, and marked evaluated
+- closed attempts can also be auto-assigned `0` and treated as evaluated
+- evaluator cannot edit marks for those auto-evaluated zero-mark cases
+- admin can request reassign for interrupted or closed attempts
+- proctor can approve reassign requests from a dedicated tab
+- result publishing is locked until approval is obtained
+- request approval is highlighted while publish stays greyed out
+- failed students now receive correct failed-result email wording
+- question bank questions now carry course-code tags
+- question bank search supports subject-wise reuse
+- question bank preview and selection now support pagination
+- proctor suspicious-event review is shown row-wise inside one card per student
+- admin assignment and reassign interfaces are more compact and easier to scan
 
 ## Technology Stack
 
@@ -79,80 +211,28 @@ The project combines:
 - PostgreSQL
 - Neon hosted Postgres
 
-### Cloud / Hosting
+### Infrastructure
 - AWS EC2
 - Nginx
 - PM2
 - AWS S3
 
-### Mail
-- SMTP for student verification and result notifications
+### Notifications
+- SMTP for account verification and result mail delivery
 
-## System Overview
-
-```text
-Admin -> creates exam -> assigns students/staff
-Student -> verifies email -> takes exam -> suspicious events logged if needed
-Evaluator -> marks submission
-Proctor -> reviews suspicious logs -> saves case decision
-Admin -> publishes results
-Auditor -> reviews logs, verification state, and stored reports
-```
-
-## Core Functional Areas
-
-### 1. Exam Setup
-- create exam title, course code, timing, and duration
-- set integrity threshold
-- add structured questions for `MCQ` and `MSQ`
-- assign verified students
-
-### 2. Student Exam Flow
-- registration + email verification
-- login and assigned exam display
-- time-gated start button
-- dedicated exam window
-- autosave and final submit
-
-### 3. Integrity Monitoring
-- log suspicious actions when they occur
-- track tab switches, focus changes, and IP-related changes
-- show local warning to the test taker
-- preserve suspicious logs for future retrieval
-
-### 4. Proctor Workflow
-- inspect flagged exams
-- review student-wise suspicious logs
-- assign penalties
-- open cases
-- save decisions
-
-### 5. Evaluation and Publishing
-- evaluator reviews submissions
-- admin can publish only when:
-  - all assigned students submitted
-  - all students were evaluated
-  - all opened cases received a proctor decision
-- result publication sends mail and stores result reports automatically
-
-### 6. Audit and Reporting
-- exam-wise audit table
-- submission hash verification
-- integrity status and case status
-- stored S3-backed result reports and integrity evidence
-- audit log trail
-
-## Repository Structure
+## System Flow
 
 ```text
-backend/    Express backend and business logic
-frontend/   React frontend
-sql/        PostgreSQL schema, triggers, and helper scripts
-docs/       Project documentation and presentation PDFs
-scripts/    Utility scripts such as PDF generation and schema helpers
+Admin -> creates exam -> assigns students and staff
+Student -> verifies account -> starts exam -> answers saved during attempt
+System -> logs suspicious actions and attempt state changes
+Proctor -> reviews suspicious events -> assigns penalties -> records decisions
+Evaluator -> marks submissions or sees auto-evaluated zero-mark cases
+Admin -> requests approval -> approves -> publishes results
+Auditor -> reviews logs, hashes, evidence, and stored reports
 ```
 
-## Important Backend Route Groups
+## Backend Route Areas
 
 - `/health`
 - `/api/auth`
@@ -162,20 +242,32 @@ scripts/    Utility scripts such as PDF generation and schema helpers
 - `/api/audit`
 - `/api/documents`
 
-## Database Notes
+## Repository Structure
 
-The PostgreSQL design supports:
-- role-based users and sessions
-- exam scheduling and assignment
-- question banks and exam questions
-- autosaved and final answer submissions
+```text
+backend/    Express backend and business logic
+frontend/   React frontend
+sql/        PostgreSQL schema, triggers, and helper scripts
+docs/       Project documentation and presentation PDFs
+scripts/    Utility scripts and generators
+```
+
+## Database Coverage
+
+The PostgreSQL schema supports:
+
+- users, roles, and sessions
+- exam scheduling and candidate assignment
+- reusable questions and exam questions
+- autosaved and final submissions
 - suspicious event logging
-- integrity cases, evidence, and actions
+- integrity cases and decisions
 - evaluator marks and final results
 - audit logs
-- stored S3 document metadata
+- stored document metadata
 
-Important files:
+Important SQL files:
+
 - `sql/000_full_schema.sql`
 - `sql/001_extensions.sql`
 - `sql/002_schema.sql`
@@ -187,14 +279,16 @@ Important files:
 
 ## Local Setup
 
-### 1. Clone the repository
+### 1. Clone
+
 ```powershell
 git clone https://github.com/group8dbms/ExamIntegrationProject.git
 cd ExamIntegrationProject
 ```
 
-### 2. Configure environment variables
-Create `.env` files as required and provide:
+### 2. Configure Environment Variables
+
+Create `.env` files as needed and provide:
 
 ```env
 DATABASE_URL=your_neon_connection_string
@@ -209,20 +303,24 @@ S3_BUCKET=...
 MAX_UPLOAD_SIZE_BYTES=10485760
 ```
 
-### 3. Prepare database
+### 3. Prepare Database
+
 Fastest route:
-- open Neon SQL editor
+
+- open the Neon SQL editor
 - run `sql/000_full_schema.sql`
 - optionally run `sql/004_smoke_test.sql`
 
-### 4. Run backend
+### 4. Run Backend
+
 ```powershell
 cd backend
 npm install
 npm run dev
 ```
 
-### 5. Run frontend
+### 5. Run Frontend
+
 ```powershell
 cd frontend
 npm install
@@ -231,13 +329,14 @@ npm run dev
 
 ## Deployment Summary
 
-The project is designed to be deployed on EC2 with:
+This project is deployed with:
+
 - frontend served by Nginx
 - backend managed by PM2
 - Neon as hosted PostgreSQL
 - S3 as generated document storage
 
-Typical update flow:
+Typical server update flow:
 
 ```bash
 cd /home/ubuntu/ExamIntegrationProject
@@ -256,35 +355,29 @@ sudo systemctl reload nginx
 
 ## Stored Reports
 
-The system currently stores the following document types in S3:
+When configured, the system stores these document types in S3:
+
 - `result_report`
 - `integrity_evidence`
 
-The metadata for these files is stored in PostgreSQL so auditors can retrieve them from the application.
+Their metadata remains in PostgreSQL so the application can retrieve and audit them.
 
 ## Documentation
 
-Detailed project documents are available in the [`docs`](./docs) folder.
+Project documents are available in the [`docs`](./docs) folder.
 
-Presentation-friendly PDFs:
+Presentation PDFs:
+
 - [`01-functional-requirements-and-roles.pdf`](./docs/01-functional-requirements-and-roles.pdf)
 - [`02-database-er-diagram-and-schema.pdf`](./docs/02-database-er-diagram-and-schema.pdf)
 - [`03-api-calls-and-usage.pdf`](./docs/03-api-calls-and-usage.pdf)
 - [`04-system-flow-overview.pdf`](./docs/04-system-flow-overview.pdf)
 - [`05-aws-ec2-and-s3-setup.pdf`](./docs/05-aws-ec2-and-s3-setup.pdf)
 
-Supporting markdown files:
+Supporting markdown:
+
 - [`docs/neon-setup.md`](./docs/neon-setup.md)
 - [`docs/11-installation-and-deployment-guide.md`](./docs/11-installation-and-deployment-guide.md)
-
-## Current Status
-
-The project currently includes:
-- end-to-end exam lifecycle support
-- integrity logging and manual proctor review
-- evaluator and auditor workflows
-- automatic report generation and S3 storage
-- cloud-ready deployment structure
 
 ## Repository
 
