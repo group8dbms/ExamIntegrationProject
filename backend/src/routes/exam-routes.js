@@ -51,6 +51,7 @@ async function getVerifiedStudentIds(client, studentIds) {
 }
 
 let publishApprovalSchemaPromise = null;
+let reassignApprovalSchemaPromise = null;
 
 async function ensurePublishApprovalSchema() {
   if (!publishApprovalSchemaPromise) {
@@ -85,6 +86,262 @@ async function ensurePublishApprovalSchema() {
   }
 
   return publishApprovalSchemaPromise;
+}
+
+async function ensureReassignApprovalSchema() {
+  if (!reassignApprovalSchemaPromise) {
+    reassignApprovalSchemaPromise = pool.query(`
+      CREATE TABLE IF NOT EXISTS exam_reassign_request (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        exam_id UUID NOT NULL REFERENCES exam(id) ON DELETE CASCADE,
+        student_id UUID NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+        attempt_no INTEGER NOT NULL DEFAULT 1,
+        requested_by UUID NOT NULL REFERENCES app_user(id),
+        approved_by UUID REFERENCES app_user(id),
+        status TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'rejected')),
+        admin_note TEXT,
+        proctor_note TEXT,
+        approved_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_reassign_request_exam_created
+        ON exam_reassign_request(exam_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_reassign_request_status_created
+        ON exam_reassign_request(status, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_reassign_request_student_exam
+        ON exam_reassign_request(student_id, exam_id, created_at DESC);
+    `);
+  }
+
+  return reassignApprovalSchemaPromise;
+}
+
+async function getLatestReassignRequestsByExam(client, examId) {
+  await ensureReassignApprovalSchema();
+
+  const result = await client.query(
+    `
+      SELECT DISTINCT ON (rr.student_id, rr.attempt_no)
+        rr.id,
+        rr.exam_id,
+        rr.student_id,
+        rr.attempt_no,
+        rr.requested_by,
+        requester.full_name AS requested_by_name,
+        rr.approved_by,
+        approver.full_name AS approved_by_name,
+        rr.status,
+        rr.admin_note,
+        rr.proctor_note,
+        rr.approved_at,
+        rr.completed_at,
+        rr.created_at,
+        rr.updated_at
+      FROM exam_reassign_request rr
+      JOIN app_user requester ON requester.id = rr.requested_by
+      LEFT JOIN app_user approver ON approver.id = rr.approved_by
+      WHERE rr.exam_id = $1
+      ORDER BY rr.student_id, rr.attempt_no, rr.created_at DESC
+    `,
+    [examId]
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    examId: row.exam_id,
+    studentId: row.student_id,
+    attemptNo: row.attempt_no,
+    requestedBy: row.requested_by,
+    requestedByName: row.requested_by_name,
+    approvedBy: row.approved_by,
+    approvedByName: row.approved_by_name,
+    status: row.status,
+    adminNote: row.admin_note,
+    proctorNote: row.proctor_note,
+    approvedAt: row.approved_at,
+    completedAt: row.completed_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  }));
+}
+
+async function getPendingReassignRequests(client) {
+  await ensureReassignApprovalSchema();
+
+  const result = await client.query(
+    `
+      SELECT
+        rr.id,
+        rr.exam_id,
+        e.title AS exam_title,
+        e.course_code,
+        rr.student_id,
+        student.full_name AS student_name,
+        student.email AS student_email,
+        rr.attempt_no,
+        rr.requested_by,
+        requester.full_name AS requested_by_name,
+        rr.status,
+        rr.admin_note,
+        rr.created_at,
+        CASE
+          WHEN s.storage_metadata->>'systemGenerated' = 'not_appeared' THEN 'not_appeared'
+          WHEN s.storage_metadata->>'systemGenerated' = 'closed_attempt' THEN 'closed'
+          WHEN ec.started_at IS NOT NULL AND ec.submitted_at IS NULL THEN 'attempted'
+          ELSE ec.status::text
+        END AS candidate_status,
+        ec.started_at,
+        ec.submitted_at
+      FROM exam_reassign_request rr
+      JOIN exam e ON e.id = rr.exam_id
+      JOIN app_user student ON student.id = rr.student_id
+      JOIN app_user requester ON requester.id = rr.requested_by
+      LEFT JOIN exam_candidate ec
+        ON ec.exam_id = rr.exam_id
+       AND ec.student_id = rr.student_id
+       AND ec.attempt_no = rr.attempt_no
+      LEFT JOIN answer_submission s
+        ON s.exam_id = rr.exam_id
+       AND s.student_id = rr.student_id
+       AND s.attempt_no = rr.attempt_no
+      WHERE rr.status = 'pending'
+      ORDER BY rr.created_at DESC, e.title ASC, student.full_name ASC
+    `
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    examId: row.exam_id,
+    examTitle: row.exam_title,
+    courseCode: row.course_code,
+    studentId: row.student_id,
+    studentName: row.student_name,
+    studentEmail: row.student_email,
+    attemptNo: row.attempt_no,
+    requestedBy: row.requested_by,
+    requestedByName: row.requested_by_name,
+    status: row.status,
+    adminNote: row.admin_note,
+    createdAt: row.created_at,
+    candidateStatus: row.candidate_status,
+    startedAt: row.started_at,
+    submittedAt: row.submitted_at
+  }));
+}
+
+async function resetCandidateAttempt(client, { examId, studentId, attemptNo }) {
+  const caseIdsResult = await client.query(
+    `
+      SELECT id
+      FROM integrity_case
+      WHERE exam_id = $1 AND student_id = $2 AND attempt_no = $3
+    `,
+    [examId, studentId, attemptNo]
+  );
+  const caseIds = caseIdsResult.rows.map((row) => row.id);
+
+  const submissionIdsResult = await client.query(
+    `
+      SELECT id
+      FROM answer_submission
+      WHERE exam_id = $1 AND student_id = $2 AND attempt_no = $3
+    `,
+    [examId, studentId, attemptNo]
+  );
+  const submissionIds = submissionIdsResult.rows.map((row) => row.id);
+
+  if (submissionIds.length) {
+    await client.query(
+      `
+        DELETE FROM evaluation
+        WHERE submission_id = ANY($1::uuid[])
+      `,
+      [submissionIds]
+    );
+
+    await client.query(
+      `
+        DELETE FROM result
+        WHERE submission_id = ANY($1::uuid[])
+      `,
+      [submissionIds]
+    );
+  }
+
+  await client.query(
+    `
+      DELETE FROM answer_submission
+      WHERE exam_id = $1 AND student_id = $2 AND attempt_no = $3
+    `,
+    [examId, studentId, attemptNo]
+  );
+
+  await client.query(
+    `
+      DELETE FROM integrity_penalty_assignment
+      WHERE exam_id = $1 AND student_id = $2 AND attempt_no = $3
+    `,
+    [examId, studentId, attemptNo]
+  );
+
+  await client.query(
+    `
+      DELETE FROM proctor_flag
+      WHERE exam_id = $1 AND student_id = $2 AND attempt_no = $3
+    `,
+    [examId, studentId, attemptNo]
+  );
+
+  await client.query(
+    `
+      DELETE FROM integrity_event
+      WHERE exam_id = $1 AND student_id = $2 AND attempt_no = $3
+    `,
+    [examId, studentId, attemptNo]
+  );
+
+  if (caseIds.length) {
+    await client.query(
+      `
+        DELETE FROM case_action
+        WHERE case_id = ANY($1::uuid[])
+      `,
+      [caseIds]
+    );
+
+    await client.query(
+      `
+        DELETE FROM case_evidence
+        WHERE case_id = ANY($1::uuid[])
+      `,
+      [caseIds]
+    );
+  }
+
+  await client.query(
+    `
+      DELETE FROM integrity_case
+      WHERE exam_id = $1 AND student_id = $2 AND attempt_no = $3
+    `,
+    [examId, studentId, attemptNo]
+  );
+
+  await client.query(
+    `
+      UPDATE exam_candidate
+      SET status = 'in_progress',
+          started_at = NULL,
+          submitted_at = NULL,
+          suspicion_score = 0,
+          last_ip = NULL,
+          last_device = NULL
+      WHERE exam_id = $1 AND student_id = $2 AND attempt_no = $3
+    `,
+    [examId, studentId, attemptNo]
+  );
 }
 
 async function getLatestPublishRequest(client, examId) {
@@ -641,26 +898,61 @@ router.get(
   requireAuth,
   requireRole("admin", "auditor"),
   asyncHandler(async (req, res) => {
-    const result = await pool.query(
+    const client = await pool.connect();
+
+    try {
+      const result = await client.query(
       `
-        SELECT ec.student_id, u.full_name, u.email, u.email_verified, u.is_active
+        SELECT
+          ec.student_id,
+          u.full_name,
+          u.email,
+          u.email_verified,
+          u.is_active,
+          ec.attempt_no,
+          CASE
+            WHEN s.storage_metadata->>'systemGenerated' = 'not_appeared' THEN 'not_appeared'
+            WHEN s.storage_metadata->>'systemGenerated' = 'closed_attempt' THEN 'closed'
+            WHEN ec.started_at IS NOT NULL AND ec.submitted_at IS NULL THEN 'attempted'
+            ELSE ec.status::text
+          END AS candidate_status,
+          ec.started_at,
+          ec.submitted_at,
+          ec.suspicion_score,
+          COALESCE(r.awarded_marks, NULL) AS awarded_marks,
+          COALESCE(r.percentage, NULL) AS percentage
         FROM exam_candidate ec
         JOIN app_user u ON u.id = ec.student_id
+        LEFT JOIN answer_submission s ON s.exam_id = ec.exam_id AND s.student_id = ec.student_id AND s.attempt_no = ec.attempt_no
+        LEFT JOIN result r ON r.exam_id = ec.exam_id AND r.student_id = ec.student_id AND r.submission_id = s.id
         WHERE ec.exam_id = $1
         ORDER BY u.full_name ASC
       `,
       [req.params.examId]
-    );
+      );
+      const latestRequests = await getLatestReassignRequestsByExam(client, req.params.examId);
+      const requestByCandidate = new Map(latestRequests.map((request) => [`${request.studentId}:${request.attemptNo}`, request]));
 
-    res.json({
-      items: result.rows.map((item) => ({
-        id: item.student_id,
-        fullName: item.full_name,
-        email: item.email,
-        emailVerified: item.email_verified,
-        isActive: item.is_active
-      }))
-    });
+      res.json({
+        items: result.rows.map((item) => ({
+          id: item.student_id,
+          fullName: item.full_name,
+          email: item.email,
+          emailVerified: item.email_verified,
+          isActive: item.is_active,
+          attemptNo: item.attempt_no,
+          status: item.candidate_status,
+          startedAt: item.started_at,
+          submittedAt: item.submitted_at,
+          suspicionScore: item.suspicion_score,
+          awardedMarks: item.awarded_marks,
+          percentage: item.percentage,
+          reassignRequest: requestByCandidate.get(`${item.student_id}:${item.attempt_no}`) || null
+        }))
+      });
+    } finally {
+      client.release();
+    }
   })
 );
 
@@ -1438,6 +1730,279 @@ router.post(
       if (error.statusCode) {
         return res.status(error.statusCode).json({ message: error.message });
       }
+      throw error;
+    } finally {
+      client.release();
+    }
+  })
+);
+
+router.get(
+  "/:examId/reassign-requests",
+  requireAuth,
+  requireRole("admin"),
+  asyncHandler(async (req, res) => {
+    const { examId } = req.params;
+    const client = await pool.connect();
+
+    try {
+      const candidates = await client.query(
+        `
+          SELECT
+            ec.student_id,
+            u.full_name,
+            u.email,
+            ec.attempt_no,
+            CASE
+              WHEN s.storage_metadata->>'systemGenerated' = 'not_appeared' THEN 'not_appeared'
+              WHEN s.storage_metadata->>'systemGenerated' = 'closed_attempt' THEN 'closed'
+              WHEN ec.started_at IS NOT NULL AND ec.submitted_at IS NULL THEN 'attempted'
+              ELSE ec.status::text
+            END AS candidate_status,
+            ec.started_at,
+            ec.submitted_at,
+            COALESCE(r.awarded_marks, NULL) AS awarded_marks,
+            COALESCE(r.percentage, NULL) AS percentage
+          FROM exam_candidate ec
+          JOIN app_user u ON u.id = ec.student_id
+          LEFT JOIN answer_submission s ON s.exam_id = ec.exam_id AND s.student_id = ec.student_id AND s.attempt_no = ec.attempt_no
+          LEFT JOIN result r ON r.exam_id = ec.exam_id AND r.student_id = ec.student_id AND r.submission_id = s.id
+          WHERE ec.exam_id = $1
+          ORDER BY u.full_name ASC
+        `,
+        [examId]
+      );
+
+      const requests = await getLatestReassignRequestsByExam(client, examId);
+      const requestByCandidate = new Map(requests.map((request) => [`${request.studentId}:${request.attemptNo}`, request]));
+
+      res.json({
+        items: candidates.rows.map((item) => ({
+          studentId: item.student_id,
+          studentName: item.full_name,
+          studentEmail: item.email,
+          attemptNo: item.attempt_no,
+          status: item.candidate_status,
+          startedAt: item.started_at,
+          submittedAt: item.submitted_at,
+          awardedMarks: item.awarded_marks,
+          percentage: item.percentage,
+          reassignRequest: requestByCandidate.get(`${item.student_id}:${item.attempt_no}`) || null
+        }))
+      });
+    } finally {
+      client.release();
+    }
+  })
+);
+
+router.post(
+  "/:examId/reassign-requests",
+  requireAuth,
+  requireRole("admin"),
+  asyncHandler(async (req, res) => {
+    const { examId } = req.params;
+    const { studentId, attemptNo = 1, note = "" } = req.body;
+    const requesterId = req.user.id;
+    const client = await pool.connect();
+
+    if (!studentId) {
+      return res.status(400).json({ message: "studentId is required." });
+    }
+
+    try {
+      await client.query("BEGIN");
+      await ensureReassignApprovalSchema();
+
+      const candidate = await client.query(
+        `
+          SELECT
+            ec.exam_id,
+            ec.student_id,
+            ec.attempt_no,
+            CASE
+              WHEN s.storage_metadata->>'systemGenerated' = 'not_appeared' THEN 'not_appeared'
+              WHEN s.storage_metadata->>'systemGenerated' = 'closed_attempt' THEN 'closed'
+              WHEN ec.started_at IS NOT NULL AND ec.submitted_at IS NULL THEN 'attempted'
+              ELSE ec.status::text
+            END AS candidate_status
+          FROM exam_candidate ec
+          LEFT JOIN answer_submission s ON s.exam_id = ec.exam_id AND s.student_id = ec.student_id AND s.attempt_no = ec.attempt_no
+          WHERE ec.exam_id = $1 AND ec.student_id = $2 AND ec.attempt_no = $3
+        `,
+        [examId, studentId, attemptNo]
+      );
+
+      if (!candidate.rows.length) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ message: "Assigned exam attempt not found for this student." });
+      }
+
+      if (!["attempted", "closed", "submitted", "graded", "not_appeared"].includes(candidate.rows[0].candidate_status)) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ message: "Only attempted, closed, submitted, evaluated, or not appeared attempts can be sent for reassignment approval." });
+      }
+
+      const existingPending = await client.query(
+        `
+          SELECT id
+          FROM exam_reassign_request
+          WHERE exam_id = $1 AND student_id = $2 AND attempt_no = $3 AND status = 'pending'
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        [examId, studentId, attemptNo]
+      );
+
+      if (existingPending.rows.length) {
+        await client.query("COMMIT");
+        return res.json({ message: "A proctor approval request is already pending for this student attempt.", requestId: existingPending.rows[0].id });
+      }
+
+      const requestResult = await client.query(
+        `
+          INSERT INTO exam_reassign_request (exam_id, student_id, attempt_no, requested_by, status, admin_note)
+          VALUES ($1, $2, $3, $4, 'pending', $5)
+          RETURNING id
+        `,
+        [examId, studentId, attemptNo, requesterId, note.trim() || null]
+      );
+
+      await writeAuditLog(client, {
+        actorUserId: requesterId,
+        actorRole: req.user.role,
+        action: "exam_reassign_requested",
+        entityType: "exam",
+        entityId: examId,
+        ipAddress: req.ip,
+        details: {
+          requestId: requestResult.rows[0].id,
+          studentId,
+          attemptNo,
+          note: note.trim() || null
+        }
+      });
+
+      await client.query("COMMIT");
+      res.status(201).json({
+        message: "Reassign request sent to proctors for approval.",
+        requestId: requestResult.rows[0].id
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  })
+);
+
+router.get(
+  "/reassign-requests/pending",
+  requireAuth,
+  requireRole("proctor"),
+  asyncHandler(async (req, res) => {
+    const client = await pool.connect();
+
+    try {
+      const items = await getPendingReassignRequests(client);
+      res.json({ items });
+    } finally {
+      client.release();
+    }
+  })
+);
+
+router.post(
+  "/reassign-requests/:requestId/approve",
+  requireAuth,
+  requireRole("proctor"),
+  asyncHandler(async (req, res) => {
+    const { requestId } = req.params;
+    const { note = "" } = req.body;
+    const approverId = req.user.id;
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+      await ensureReassignApprovalSchema();
+
+      const requestResult = await client.query(
+        `
+          SELECT id, exam_id, student_id, attempt_no, requested_by, status
+          FROM exam_reassign_request
+          WHERE id = $1
+          FOR UPDATE
+        `,
+        [requestId]
+      );
+
+      if (!requestResult.rows.length) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ message: "Reassign request not found." });
+      }
+
+      const request = requestResult.rows[0];
+      if (request.status !== "pending") {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ message: "This reassign request is no longer pending." });
+      }
+
+      const candidate = await client.query(
+        `
+          SELECT exam_id, student_id, attempt_no
+          FROM exam_candidate
+          WHERE exam_id = $1 AND student_id = $2 AND attempt_no = $3
+          FOR UPDATE
+        `,
+        [request.exam_id, request.student_id, request.attempt_no]
+      );
+
+      if (!candidate.rows.length) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ message: "The exam attempt linked to this request no longer exists." });
+      }
+
+      await resetCandidateAttempt(client, {
+        examId: request.exam_id,
+        studentId: request.student_id,
+        attemptNo: request.attempt_no
+      });
+
+      await client.query(
+        `
+          UPDATE exam_reassign_request
+          SET status = 'completed',
+              approved_by = $2,
+              proctor_note = $3,
+              approved_at = NOW(),
+              completed_at = NOW(),
+              updated_at = NOW()
+          WHERE id = $1
+        `,
+        [requestId, approverId, note.trim() || null]
+      );
+
+      await writeAuditLog(client, {
+        actorUserId: approverId,
+        actorRole: req.user.role,
+        action: "exam_attempt_reassigned",
+        entityType: "exam",
+        entityId: request.exam_id,
+        ipAddress: req.ip,
+        details: {
+          requestId,
+          studentId: request.student_id,
+          attemptNo: request.attempt_no,
+          approvedBy: approverId,
+          note: note.trim() || null
+        }
+      });
+
+      await client.query("COMMIT");
+      res.json({ message: "Reassign approved. The student can now start the same exam again." });
+    } catch (error) {
+      await client.query("ROLLBACK");
       throw error;
     } finally {
       client.release();

@@ -73,6 +73,40 @@ function formatPublishState(state) {
   }
 }
 
+function formatCandidateStatus(status) {
+  switch (status) {
+    case "in_progress":
+      return "Assigned";
+    case "attempted":
+      return "Attempted";
+    case "closed":
+      return "Attempt closed";
+    case "submitted":
+      return "Submitted";
+    case "graded":
+      return "Evaluated";
+    case "not_appeared":
+      return "Not appeared";
+    default:
+      return status || "Unknown";
+  }
+}
+
+function formatReassignRequestStatus(request) {
+  if (!request) return "Not requested";
+
+  switch (request.status) {
+    case "pending":
+      return "Waiting for proctor approval";
+    case "completed":
+      return "Approved and reopened";
+    case "rejected":
+      return "Rejected";
+    default:
+      return request.status || "Unknown";
+  }
+}
+
 export default function AdminPage({ session, onLogout, setMessage }) {
   const [activeView, setActiveView] = useState("faculty");
   const [exams, setExams] = useState([]);
@@ -145,6 +179,24 @@ export default function AdminPage({ session, onLogout, setMessage }) {
     try {
       const data = await api(`/api/exams/${examId}/candidates`);
       setAssignedActiveStudents(data.items || []);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  async function handleCandidateReassign(studentId, attemptNo) {
+    if (!activeExamId) {
+      setMessage("Choose an active quiz first.");
+      return;
+    }
+
+    try {
+      const data = await api(`/api/exams/${activeExamId}/reassign-requests`, {
+        method: "POST",
+        body: JSON.stringify({ studentId, attemptNo })
+      });
+      setMessage(data.message);
+      await Promise.all([loadExams(), loadAssignedActiveStudents(activeExamId)]);
     } catch (error) {
       setMessage(error.message);
     }
@@ -648,6 +700,7 @@ export default function AdminPage({ session, onLogout, setMessage }) {
         <button type="button" className={activeView === "quiz" ? "view-pill active" : "view-pill"} onClick={() => setActiveView("quiz")}>2. Prepare Quiz</button>
         <button type="button" className={activeView === "publish" ? "view-pill active" : "view-pill"} onClick={() => setActiveView("publish")}>3. Publish Results</button>
         <button type="button" className={activeView === "active" ? "view-pill active" : "view-pill"} onClick={() => setActiveView("active")}>4. Quizzes Active</button>
+        <button type="button" className={activeView === "reassign" ? "view-pill active" : "view-pill"} onClick={() => setActiveView("reassign")}>5. Reassign Attempts</button>
       </div>
 
       {activeView === "faculty" && (
@@ -985,8 +1038,14 @@ export default function AdminPage({ session, onLogout, setMessage }) {
                                   <div>
                                     <span>{student.fullName}</span>
                                     <small>{student.email}</small>
+                                    <small>Status: {formatCandidateStatus(student.status)}</small>
+                                    {student.startedAt ? <small>Started: {new Date(student.startedAt).toLocaleString()}</small> : null}
+                                    {student.submittedAt ? <small>Submitted: {new Date(student.submittedAt).toLocaleString()}</small> : null}
+                                    {student.awardedMarks !== null && student.awardedMarks !== undefined ? <small>Marks: {student.awardedMarks}{student.percentage !== null && student.percentage !== undefined ? ` (${student.percentage}%)` : ""}</small> : null}
                                   </div>
-                                  <button type="button" className="ghost-button danger-button" onClick={() => handleActiveQuizRemove([student.id])}>Remove</button>
+                                  <div className="assigned-student-actions">
+                                    <button type="button" className="ghost-button danger-button" onClick={() => handleActiveQuizRemove([student.id])}>Remove</button>
+                                  </div>
                                 </div>
                               ))}
                             </div>
@@ -1021,6 +1080,115 @@ export default function AdminPage({ session, onLogout, setMessage }) {
                 </div>
               ) : (
                 <p>Select a quiz from the left to manage it.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeView === "reassign" && (
+        <div className="task-page">
+          <div className="task-intro">
+            <p className="eyebrow">Use Case Five</p>
+            <h3>Reassign Closed Attempts</h3>
+            <p>Use this queue when a student accidentally closes an exam attempt. Admin can raise a reopen request here, and a proctor must approve it before the same exam becomes available again for that student.</p>
+          </div>
+
+          <div className="publish-grid">
+            <div className="task-card">
+              <div className="task-card-header">
+                <h3>Exam Selection</h3>
+                <button type="button" className="secondary-button" onClick={loadExams}>Refresh</button>
+              </div>
+              <div className="list-box">
+                {exams.length ? exams.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={activeExamId === item.id ? "publish-card ready" : "publish-card muted"}
+                    onClick={() => setActiveExamId(item.id)}
+                  >
+                    <div className="publish-card-top">
+                      <div>
+                        <strong>{item.title}</strong>
+                        <p>{item.course_code}</p>
+                      </div>
+                      <span className={item.publish_state === "published" ? "status-badge published" : item.publish_state === "ready_to_publish" ? "status-badge ready" : item.publish_state === "waiting_for_evaluation" || item.publish_state === "waiting_for_proctor_decision" ? "status-badge waiting" : "status-badge muted"}>
+                        {formatPublishState(item.publish_state)}
+                      </span>
+                    </div>
+                    <p className="info-line">Assigned: {item.candidate_count} | Submitted: {item.submitted_count} | Evaluated: {item.evaluated_count}</p>
+                  </button>
+                )) : <p>No quizzes created yet.</p>}
+              </div>
+            </div>
+
+            <div className="task-card">
+              <div className="task-card-header">
+                <div>
+                  <h3>Students And Reassign Status</h3>
+                  <span className="info-line">{activeExam ? `${activeExam.title} | ${activeExam.course_code}` : "Choose an exam to inspect requests"}</span>
+                </div>
+                {activeExamId ? <button type="button" className="secondary-button" onClick={() => loadAssignedActiveStudents(activeExamId)}>Refresh List</button> : null}
+              </div>
+
+              {activeExam ? (
+                assignedActiveStudents.length ? (
+                  <div className="reassign-candidate-list">
+                    {assignedActiveStudents.map((student) => {
+                      const canRequestReassign = ["attempted", "closed"].includes(student.status) && student.reassignRequest?.status !== "pending";
+
+                      return (
+                        <div key={`${student.id}:${student.attemptNo}`} className="reassign-candidate-card">
+                          <div className="publish-card-top">
+                            <div>
+                              <strong>{student.fullName}</strong>
+                              <p>{student.email}</p>
+                            </div>
+                            <span className={student.status === "closed" ? "status-badge disqualified" : student.status === "attempted" ? "status-badge waiting" : student.status === "graded" ? "status-badge ready" : "status-badge muted"}>
+                              {formatCandidateStatus(student.status)}
+                            </span>
+                          </div>
+
+                          <div className="reassign-meta-grid">
+                            <span>Attempt: {student.attemptNo}</span>
+                            <span>Started: {student.startedAt ? new Date(student.startedAt).toLocaleString() : "-"}</span>
+                            <span>Submitted: {student.submittedAt ? new Date(student.submittedAt).toLocaleString() : "-"}</span>
+                            <span>Marks: {student.awardedMarks !== null && student.awardedMarks !== undefined ? `${student.awardedMarks}${student.percentage !== null && student.percentage !== undefined ? ` (${student.percentage}%)` : ""}` : "-"}</span>
+                            <span>Request: {formatReassignRequestStatus(student.reassignRequest)}</span>
+                            <span>Approved By: {student.reassignRequest?.approvedByName || "-"}</span>
+                          </div>
+
+                          {student.reassignRequest?.createdAt ? (
+                            <p className="info-line">
+                              Last request raised on {new Date(student.reassignRequest.createdAt).toLocaleString()}
+                              {student.reassignRequest?.requestedByName ? ` by ${student.reassignRequest.requestedByName}` : ""}.
+                            </p>
+                          ) : null}
+
+                          {student.reassignRequest?.proctorNote ? (
+                            <p className="info-line">Proctor note: {student.reassignRequest.proctorNote}</p>
+                          ) : null}
+
+                          <div className="form-actions">
+                            <button
+                              type="button"
+                              className="primary-button"
+                              disabled={!canRequestReassign}
+                              onClick={() => handleCandidateReassign(student.id, student.attemptNo)}
+                            >
+                              {student.reassignRequest?.status === "pending" ? "Awaiting Proctor Approval" : "Request Reassign"}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="info-line">No students are assigned to this quiz yet.</p>
+                )
+              ) : (
+                <p className="info-line">Choose an exam from the left to review eligible student attempts.</p>
               )}
             </div>
           </div>

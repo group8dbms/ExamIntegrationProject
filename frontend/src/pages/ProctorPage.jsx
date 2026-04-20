@@ -40,7 +40,27 @@ function createDecisionDraft(sessionId, student = null) {
   };
 }
 
+function formatCandidateStatus(status) {
+  switch (status) {
+    case "in_progress":
+      return "Assigned";
+    case "attempted":
+      return "Attempted";
+    case "closed":
+      return "Attempt closed";
+    case "submitted":
+      return "Submitted";
+    case "graded":
+      return "Evaluated";
+    case "not_appeared":
+      return "Not appeared";
+    default:
+      return status || "Unknown";
+  }
+}
+
 export default function ProctorPage({ session, onLogout, setMessage }) {
+  const [activeView, setActiveView] = useState("monitor");
   const [liveExams, setLiveExams] = useState([]);
   const [selectedExamId, setSelectedExamId] = useState("");
   const [selectedExam, setSelectedExam] = useState(null);
@@ -48,14 +68,17 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
   const [selectedStudentKey, setSelectedStudentKey] = useState("");
   const [penaltyDrafts, setPenaltyDrafts] = useState({});
   const [decisionDraft, setDecisionDraft] = useState(createDecisionDraft(session?.id));
+  const [reassignRequests, setReassignRequests] = useState([]);
 
   useEffect(() => {
     void loadLiveExams();
+    void loadPendingReassignRequests(false);
   }, [session?.id]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
       void loadLiveExams(false);
+      void loadPendingReassignRequests(false);
       if (selectedExamId) {
         void loadExamLogs(selectedExamId, false);
       }
@@ -116,6 +139,35 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
 
       if (announce) {
         setMessage(`Loaded suspicious logs for ${data.exam?.title || "the selected exam"}.`);
+      }
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  async function loadPendingReassignRequests(announce = true) {
+    try {
+      const data = await api("/api/exams/reassign-requests/pending");
+      const items = data.items || [];
+      setReassignRequests(items);
+      if (announce) {
+        setMessage(items.length ? `Loaded ${items.length} pending reassign request(s) for proctor approval.` : "No pending reassign requests right now.");
+      }
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  async function approveReassignRequest(requestId) {
+    try {
+      const data = await api(`/api/exams/reassign-requests/${requestId}/approve`, {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      setMessage(data.message);
+      await Promise.all([loadPendingReassignRequests(false), loadLiveExams(false)]);
+      if (selectedExamId) {
+        await loadExamLogs(selectedExamId, false);
       }
     } catch (error) {
       setMessage(error.message);
@@ -208,126 +260,188 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
       <button type="button" className="secondary-button" onClick={onLogout}>Logout</button>
     </div>
 
-    <div className="task-page">
-      <div className="task-intro">
-        <p className="eyebrow">Live Monitoring</p>
-        <h3>Review Suspicious Activity Logs, Assign Penalties, and Close Case Decisions</h3>
-        <p>Only students with suspicious activity appear here. Events stay stored after the exam, and the proctor can both assign penalties and record the case decision needed before admin publishes results. Saving the decision also generates the integrity evidence report used by auditors.</p>
-      </div>
+    <div className="view-switcher">
+      <button type="button" className={activeView === "monitor" ? "view-pill active" : "view-pill"} onClick={() => setActiveView("monitor")}>1. Live Monitoring</button>
+      <button type="button" className={activeView === "reassign" ? "view-pill active" : "view-pill"} onClick={() => setActiveView("reassign")}>2. Reassign Approvals</button>
+    </div>
 
-      <div className="publish-grid">
-        <div className="task-card">
-          <div className="task-card-header"><h3>Exams With Suspicious Activity</h3><button type="button" className="secondary-button" onClick={() => loadLiveExams()}>Refresh</button></div>
-          <div className="list-box">
-            {liveExams.map((exam) => <button key={exam.id} type="button" className={selectedExamId === exam.id ? "publish-card ready" : "publish-card muted"} onClick={() => loadExamLogs(exam.id)}>
-              <div className="publish-card-top">
-                <div>
-                  <strong>{exam.title}</strong>
-                  <p>{exam.course_code}</p>
+    {activeView === "monitor" && (
+      <div className="task-page">
+        <div className="task-intro">
+          <p className="eyebrow">Live Monitoring</p>
+          <h3>Review Suspicious Activity Logs, Assign Penalties, and Close Case Decisions</h3>
+          <p>Only students with suspicious activity appear here. Events stay stored after the exam, and the proctor can both assign penalties and record the case decision needed before admin publishes results. Saving the decision also generates the integrity evidence report used by auditors.</p>
+        </div>
+
+        <div className="publish-grid">
+          <div className="task-card">
+            <div className="task-card-header"><h3>Exams With Suspicious Activity</h3><button type="button" className="secondary-button" onClick={() => loadLiveExams()}>Refresh</button></div>
+            <div className="list-box">
+              {liveExams.map((exam) => <button key={exam.id} type="button" className={selectedExamId === exam.id ? "publish-card ready" : "publish-card muted"} onClick={() => loadExamLogs(exam.id)}>
+                <div className="publish-card-top">
+                  <div>
+                    <strong>{exam.title}</strong>
+                    <p>{exam.course_code}</p>
+                  </div>
+                  <span className="status-badge waiting">Logs</span>
                 </div>
-                <span className="status-badge waiting">Logs</span>
-              </div>
-              <p className="info-line">Flagged students: {exam.flagged_student_count} | Suspicious events: {exam.suspicious_event_count}</p>
-              <p className="info-line">Window: {formatDateTime(exam.start_at)} to {formatDateTime(exam.end_at)}</p>
-              <p className="info-line">Last event: {formatDateTime(exam.last_event_at)}</p>
-            </button>)}
-            {!liveExams.length && <p>No exams have suspicious activity logs right now.</p>}
+                <p className="info-line">Flagged students: {exam.flagged_student_count} | Suspicious events: {exam.suspicious_event_count}</p>
+                <p className="info-line">Window: {formatDateTime(exam.start_at)} to {formatDateTime(exam.end_at)}</p>
+                <p className="info-line">Last event: {formatDateTime(exam.last_event_at)}</p>
+              </button>)}
+              {!liveExams.length && <p>No exams have suspicious activity logs right now.</p>}
+            </div>
           </div>
+
+          <div className="task-card">
+            <div className="task-card-header">
+              <div>
+                <h3>Flagged Students</h3>
+                <span className="info-line">{selectedExam ? `${selectedExam.title} | ${selectedExam.course_code}` : "Choose an exam to inspect"}</span>
+              </div>
+            </div>
+            <div className="list-box">
+              {studentLogs.map((student) => <button key={`${student.studentId}:${student.attemptNo}`} type="button" className={selectedStudentKey === `${student.studentId}:${student.attemptNo}` ? "publish-card ready" : "publish-card muted"} onClick={() => setSelectedStudentKey(`${student.studentId}:${student.attemptNo}`)}>
+                <div className="publish-card-top">
+                  <div>
+                    <strong>{student.studentName}</strong>
+                    <p>{student.studentEmail}</p>
+                  </div>
+                  <span className={student.integrityScore > 0 ? "status-badge waiting" : "status-badge muted"}>Penalty total: {student.integrityScore}</span>
+                </div>
+                <p className="info-line">Events: {student.totalEvents} | Last seen: {formatDateTime(student.lastEventAt)}</p>
+                <p className="info-line">Case: {getCaseDisplayStatus(student)} | Decision: {student.caseDecision || "Pending"}</p>
+              </button>)}
+              {!studentLogs.length && <p>No suspicious logs recorded for this exam yet.</p>}
+            </div>
+          </div>
+        </div>
+
+        <div className="task-page task-layout-split">
+          <div className="task-card">
+            {selectedStudent ? <>
+              <div className="task-card-header">
+                <div>
+                  <h3>{selectedStudent.studentName}</h3>
+                  <p className="info-line">{selectedStudent.studentEmail}</p>
+                  <p className="info-line">Manual penalty total: {selectedStudent.integrityScore} | Events logged: {selectedStudent.totalEvents}</p>
+                  <p className="info-line">Latest case: {selectedStudent.caseId || "Not opened"} | Status: {getCaseDisplayStatus(selectedStudent)} | Decision: {selectedStudent.caseDecision || "Pending"}</p>
+                </div>
+                <span className="status-badge waiting">Attempt {selectedStudent.attemptNo}</span>
+              </div>
+
+              <div className="form-actions">
+                <button type="button" className="secondary-button" onClick={openCaseForStudent}>{selectedStudent.caseId && !selectedStudent.caseClosedAt ? "Open Existing Case" : "Open Case"}</button>
+              </div>
+
+              <div className="question-list">
+                {selectedStudent.events.map((event) => {
+                  const draft = penaltyDrafts[event.eventId] || { penaltyPoints: "", note: "" };
+                  return <div key={event.eventId} className="question-preview-card">
+                    <div className="publish-card-top">
+                      <div>
+                        <strong>{formatEventLabel(event.eventType)}</strong>
+                        <p className="info-line">{formatDateTime(event.eventTime)}</p>
+                      </div>
+                      <span className={event.penaltyPoints !== null ? "status-badge ready" : "status-badge muted"}>{event.penaltyPoints !== null ? `Penalty: ${event.penaltyPoints}` : "No penalty assigned"}</span>
+                    </div>
+                    <span><strong>IP:</strong> {event.ipAddress || "-"}</span>
+                    <span><strong>Device:</strong> {event.deviceFingerprint || "-"}</span>
+                    <span><strong>Details:</strong> {formatDetails(event.details)}</span>
+                    <span><strong>Assigned by:</strong> {event.assignedByName || "Not assigned yet"}</span>
+                    <div className="task-page task-layout-split compact-split">
+                      <label className="field">
+                        <span>Penalty Points</span>
+                        <input type="number" min="0" step="0.5" value={draft.penaltyPoints} onChange={(e) => setPenaltyDrafts({ ...penaltyDrafts, [event.eventId]: { ...draft, penaltyPoints: e.target.value } })} placeholder="0" />
+                      </label>
+                      <label className="field">
+                        <span>Proctor Note</span>
+                        <input value={draft.note} onChange={(e) => setPenaltyDrafts({ ...penaltyDrafts, [event.eventId]: { ...draft, note: e.target.value } })} placeholder="Explain the penalty decision" />
+                      </label>
+                    </div>
+                    <div className="form-actions">
+                      <button type="button" className="primary-button" onClick={() => assignPenalty(event.eventId)}>Save Penalty</button>
+                    </div>
+                  </div>;
+                })}
+              </div>
+            </> : <p>Select an exam and a flagged student to review suspicious activity logs.</p>}
+          </div>
+
+          <div className="task-card">
+            {selectedStudent ? <form className="single-column" onSubmit={saveCaseDecision}>
+              <div className="task-card-header">
+                <div>
+                  <h3>Proctor Decision</h3>
+                  <p className="info-line">A case decision is required before admin can publish results for exams with opened cases.</p>
+                </div>
+              </div>
+
+              <p className="info-line">Case ID: {selectedStudent.caseId || "Open a case first"}</p>
+              <p className="info-line">Opened at: {formatDateTime(selectedStudent.caseOpenedAt)} | Closed at: {formatDateTime(selectedStudent.caseClosedAt)} | Display status: {getCaseDisplayStatus(selectedStudent)}</p>
+              <label className="field"><span>Status</span><select value={decisionDraft.status} onChange={(e) => setDecisionDraft({ ...decisionDraft, status: e.target.value })}><option value="under_review">Under Review</option><option value="cleared">Cleared</option><option value="confirmed_cheating">Confirmed Cheating</option><option value="resolved">Resolved</option></select></label>
+              <label className="field"><span>Decision</span><select value={decisionDraft.decision} onChange={(e) => setDecisionDraft({ ...decisionDraft, decision: e.target.value })}><option value="manual_review">Manual Review</option><option value="warning">Warning</option><option value="no_issue">No Issue</option><option value="invalidate_exam">Invalidate Exam</option></select></label>
+              <label className="field"><span>Decision Notes</span><textarea rows="6" value={decisionDraft.decisionNotes} onChange={(e) => setDecisionDraft({ ...decisionDraft, decisionNotes: e.target.value })} placeholder="Summarize the proctor decision for this case" /></label>
+              <div className="form-actions"><button className="primary-button" type="submit" disabled={!selectedStudent.caseId}>Save Proctor Decision</button></div>
+            </form> : <p>Select a flagged student to open a case and record the proctor decision.</p>}
+          </div>
+        </div>
+      </div>
+    )}
+
+    {activeView === "reassign" && (
+      <div className="task-page">
+        <div className="task-intro">
+          <p className="eyebrow">Approval Queue</p>
+          <h3>Approve Student Reassign Requests</h3>
+          <p>When admin asks to reopen a student attempt, approval here will reset that attempt and allow the same exam to be started again.</p>
         </div>
 
         <div className="task-card">
           <div className="task-card-header">
             <div>
-              <h3>Flagged Students</h3>
-              <span className="info-line">{selectedExam ? `${selectedExam.title} | ${selectedExam.course_code}` : "Choose an exam to inspect"}</span>
+              <h3>Pending Requests</h3>
+              <span className="info-line">{reassignRequests.length} request(s) waiting for proctor approval</span>
             </div>
+            <button type="button" className="secondary-button" onClick={() => loadPendingReassignRequests()}>Refresh</button>
           </div>
-          <div className="list-box">
-            {studentLogs.map((student) => <button key={`${student.studentId}:${student.attemptNo}`} type="button" className={selectedStudentKey === `${student.studentId}:${student.attemptNo}` ? "publish-card ready" : "publish-card muted"} onClick={() => setSelectedStudentKey(`${student.studentId}:${student.attemptNo}`)}>
-              <div className="publish-card-top">
-                <div>
-                  <strong>{student.studentName}</strong>
-                  <p>{student.studentEmail}</p>
-                </div>
-                <span className={student.integrityScore > 0 ? "status-badge waiting" : "status-badge muted"}>Penalty total: {student.integrityScore}</span>
-              </div>
-              <p className="info-line">Events: {student.totalEvents} | Last seen: {formatDateTime(student.lastEventAt)}</p>
-              <p className="info-line">Case: {getCaseDisplayStatus(student)} | Decision: {student.caseDecision || "Pending"}</p>
-            </button>)}
-            {!studentLogs.length && <p>No suspicious logs recorded for this exam yet.</p>}
-          </div>
-        </div>
-      </div>
 
-      <div className="task-page task-layout-split">
-        <div className="task-card">
-          {selectedStudent ? <>
-            <div className="task-card-header">
-              <div>
-                <h3>{selectedStudent.studentName}</h3>
-                <p className="info-line">{selectedStudent.studentEmail}</p>
-                <p className="info-line">Manual penalty total: {selectedStudent.integrityScore} | Events logged: {selectedStudent.totalEvents}</p>
-                <p className="info-line">Latest case: {selectedStudent.caseId || "Not opened"} | Status: {getCaseDisplayStatus(selectedStudent)} | Decision: {selectedStudent.caseDecision || "Pending"}</p>
-              </div>
-              <span className="status-badge waiting">Attempt {selectedStudent.attemptNo}</span>
-            </div>
-
-            <div className="form-actions">
-              <button type="button" className="secondary-button" onClick={openCaseForStudent}>{selectedStudent.caseId && !selectedStudent.caseClosedAt ? "Open Existing Case" : "Open Case"}</button>
-            </div>
-
-            <div className="question-list">
-              {selectedStudent.events.map((event) => {
-                const draft = penaltyDrafts[event.eventId] || { penaltyPoints: "", note: "" };
-                return <div key={event.eventId} className="question-preview-card">
+          {reassignRequests.length ? (
+            <div className="reassign-candidate-list">
+              {reassignRequests.map((request) => (
+                <div key={request.id} className="reassign-candidate-card">
                   <div className="publish-card-top">
                     <div>
-                      <strong>{formatEventLabel(event.eventType)}</strong>
-                      <p className="info-line">{formatDateTime(event.eventTime)}</p>
+                      <strong>{request.studentName}</strong>
+                      <p>{request.studentEmail}</p>
                     </div>
-                    <span className={event.penaltyPoints !== null ? "status-badge ready" : "status-badge muted"}>{event.penaltyPoints !== null ? `Penalty: ${event.penaltyPoints}` : "No penalty assigned"}</span>
+                    <span className={request.candidateStatus === "closed" ? "status-badge disqualified" : request.candidateStatus === "attempted" ? "status-badge waiting" : "status-badge muted"}>
+                      {formatCandidateStatus(request.candidateStatus)}
+                    </span>
                   </div>
-                  <span><strong>IP:</strong> {event.ipAddress || "-"}</span>
-                  <span><strong>Device:</strong> {event.deviceFingerprint || "-"}</span>
-                  <span><strong>Details:</strong> {formatDetails(event.details)}</span>
-                  <span><strong>Assigned by:</strong> {event.assignedByName || "Not assigned yet"}</span>
-                  <div className="task-page task-layout-split compact-split">
-                    <label className="field">
-                      <span>Penalty Points</span>
-                      <input type="number" min="0" step="0.5" value={draft.penaltyPoints} onChange={(e) => setPenaltyDrafts({ ...penaltyDrafts, [event.eventId]: { ...draft, penaltyPoints: e.target.value } })} placeholder="0" />
-                    </label>
-                    <label className="field">
-                      <span>Proctor Note</span>
-                      <input value={draft.note} onChange={(e) => setPenaltyDrafts({ ...penaltyDrafts, [event.eventId]: { ...draft, note: e.target.value } })} placeholder="Explain the penalty decision" />
-                    </label>
+
+                  <div className="reassign-meta-grid">
+                    <span>Exam: {request.examTitle}</span>
+                    <span>Course: {request.courseCode}</span>
+                    <span>Attempt: {request.attemptNo}</span>
+                    <span>Requested By: {request.requestedByName}</span>
+                    <span>Started: {request.startedAt ? formatDateTime(request.startedAt) : "-"}</span>
+                    <span>Submitted: {request.submittedAt ? formatDateTime(request.submittedAt) : "-"}</span>
                   </div>
+
+                  {request.adminNote ? <p className="info-line">Admin note: {request.adminNote}</p> : null}
+
                   <div className="form-actions">
-                    <button type="button" className="primary-button" onClick={() => assignPenalty(event.eventId)}>Save Penalty</button>
+                    <button type="button" className="primary-button" onClick={() => approveReassignRequest(request.id)}>Approve Reassign</button>
                   </div>
-                </div>;
-              })}
+                </div>
+              ))}
             </div>
-          </> : <p>Select an exam and a flagged student to review suspicious activity logs.</p>}
-        </div>
-
-        <div className="task-card">
-          {selectedStudent ? <form className="single-column" onSubmit={saveCaseDecision}>
-            <div className="task-card-header">
-              <div>
-                <h3>Proctor Decision</h3>
-                <p className="info-line">A case decision is required before admin can publish results for exams with opened cases.</p>
-              </div>
-            </div>
-
-            <p className="info-line">Case ID: {selectedStudent.caseId || "Open a case first"}</p>
-            <p className="info-line">Opened at: {formatDateTime(selectedStudent.caseOpenedAt)} | Closed at: {formatDateTime(selectedStudent.caseClosedAt)} | Display status: {getCaseDisplayStatus(selectedStudent)}</p>
-            <label className="field"><span>Status</span><select value={decisionDraft.status} onChange={(e) => setDecisionDraft({ ...decisionDraft, status: e.target.value })}><option value="under_review">Under Review</option><option value="cleared">Cleared</option><option value="confirmed_cheating">Confirmed Cheating</option><option value="resolved">Resolved</option></select></label>
-            <label className="field"><span>Decision</span><select value={decisionDraft.decision} onChange={(e) => setDecisionDraft({ ...decisionDraft, decision: e.target.value })}><option value="manual_review">Manual Review</option><option value="warning">Warning</option><option value="no_issue">No Issue</option><option value="invalidate_exam">Invalidate Exam</option></select></label>
-            <label className="field"><span>Decision Notes</span><textarea rows="6" value={decisionDraft.decisionNotes} onChange={(e) => setDecisionDraft({ ...decisionDraft, decisionNotes: e.target.value })} placeholder="Summarize the proctor decision for this case" /></label>
-            <div className="form-actions"><button className="primary-button" type="submit" disabled={!selectedStudent.caseId}>Save Proctor Decision</button></div>
-          </form> : <p>Select a flagged student to open a case and record the proctor decision.</p>}
+          ) : (
+            <p className="info-line">No reassign approvals are pending right now.</p>
+          )}
         </div>
       </div>
-    </div>
+    )}
   </section>;
 }
