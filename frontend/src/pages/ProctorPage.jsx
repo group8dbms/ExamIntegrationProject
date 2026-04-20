@@ -337,30 +337,30 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
               <div className="question-list">
                 {selectedStudent.events.map((event) => {
                   const draft = penaltyDrafts[event.eventId] || { penaltyPoints: "", note: "" };
-                  return <div key={event.eventId} className="question-preview-card">
-                    <div className="publish-card-top">
-                      <div>
-                        <strong>{formatEventLabel(event.eventType)}</strong>
-                        <p className="info-line">{formatDateTime(event.eventTime)}</p>
-                      </div>
-                      <span className={event.penaltyPoints !== null ? "status-badge ready" : "status-badge muted"}>{event.penaltyPoints !== null ? `Penalty: ${event.penaltyPoints}` : "No penalty assigned"}</span>
+                  return <div key={event.eventId} className="penalty-event-row">
+                    <div className="penalty-event-summary">
+                      <strong>{formatEventLabel(event.eventType)}</strong>
+                      <span>{formatDateTime(event.eventTime)}</span>
+                      <span>IP: {event.ipAddress || "-"}</span>
+                      <span>Device: {event.deviceFingerprint || "-"}</span>
+                      <span>Assigned by: {event.assignedByName || "Not assigned yet"}</span>
                     </div>
-                    <span><strong>IP:</strong> {event.ipAddress || "-"}</span>
-                    <span><strong>Device:</strong> {event.deviceFingerprint || "-"}</span>
-                    <span><strong>Details:</strong> {formatDetails(event.details)}</span>
-                    <span><strong>Assigned by:</strong> {event.assignedByName || "Not assigned yet"}</span>
-                    <div className="task-page task-layout-split compact-split">
-                      <label className="field">
-                        <span>Penalty Points</span>
+                    <div className="penalty-event-details">
+                      <span><strong>Details:</strong> {formatDetails(event.details)}</span>
+                    </div>
+                    <div className="penalty-event-editor">
+                      <label className="field compact-field">
+                        <span>Penalty</span>
                         <input type="number" min="0" step="0.5" value={draft.penaltyPoints} onChange={(e) => setPenaltyDrafts({ ...penaltyDrafts, [event.eventId]: { ...draft, penaltyPoints: e.target.value } })} placeholder="0" />
                       </label>
-                      <label className="field">
-                        <span>Proctor Note</span>
+                      <label className="field compact-field wide-note">
+                        <span>Note</span>
                         <input value={draft.note} onChange={(e) => setPenaltyDrafts({ ...penaltyDrafts, [event.eventId]: { ...draft, note: e.target.value } })} placeholder="Explain the penalty decision" />
                       </label>
-                    </div>
-                    <div className="form-actions">
-                      <button type="button" className="primary-button" onClick={() => assignPenalty(event.eventId)}>Save Penalty</button>
+                      <div className="penalty-event-actions">
+                        <span className={event.penaltyPoints !== null ? "status-badge ready" : "status-badge muted"}>{event.penaltyPoints !== null ? `Saved: ${event.penaltyPoints}` : "Not saved"}</span>
+                        <button type="button" className="primary-button" onClick={() => assignPenalty(event.eventId)}>Save</button>
+                      </div>
                     </div>
                   </div>;
                 })}

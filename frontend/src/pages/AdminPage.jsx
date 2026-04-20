@@ -18,14 +18,16 @@ const starterQuestions = [
     prompt: "Which command is used to retrieve records from a table?",
     options: ["SELECT", "UPDATE", "GRANT", "MERGE"],
     correctAnswer: "SELECT",
-    marks: 2
+    marks: 2,
+    courseCodeTag: "DBMS101"
   },
   {
     questionType: "msq",
     prompt: "Select valid DBMS integrity concepts.",
     options: ["Entity integrity", "Referential integrity", "Cache invalidation", "Domain integrity"],
     correctAnswer: ["Entity integrity", "Referential integrity", "Domain integrity"],
-    marks: 3
+    marks: 3,
+    courseCodeTag: "DBMS101"
   }
 ];
 
@@ -35,7 +37,9 @@ function createBlankQuestion() {
     prompt: "",
     options: ["", ""],
     correctAnswer: "",
-    marks: "1"
+    marks: "1",
+    courseCodeTag: "",
+    sourceQuestionId: null
   };
 }
 
@@ -45,7 +49,9 @@ function normalizeQuestion(question) {
     prompt: question.prompt.trim(),
     options: question.options.map((option) => option.trim()).filter(Boolean),
     correctAnswer: question.questionType === "msq" ? [...question.correctAnswer] : question.correctAnswer,
-    marks: Number(question.marks)
+    marks: Number(question.marks),
+    courseCodeTag: String(question.courseCodeTag || "").trim().toUpperCase(),
+    sourceQuestionId: question.sourceQuestionId || null
   };
 }
 
@@ -129,6 +135,11 @@ export default function AdminPage({ session, onLogout, setMessage }) {
   const [publishApprovalLoading, setPublishApprovalLoading] = useState(false);
   const [activeExamId, setActiveExamId] = useState("");
   const [assignedActiveStudents, setAssignedActiveStudents] = useState([]);
+  const [questionBankItems, setQuestionBankItems] = useState([]);
+  const [questionBankSearch, setQuestionBankSearch] = useState("");
+  const [questionBankPage, setQuestionBankPage] = useState(1);
+  const [questionBankPagination, setQuestionBankPagination] = useState({ page: 1, limit: 12, total: 0, totalPages: 1 });
+  const [questionBankLoading, setQuestionBankLoading] = useState(false);
   const [errors, setErrors] = useState({});
   const [draftError, setDraftError] = useState("");
 
@@ -136,6 +147,10 @@ export default function AdminPage({ session, onLogout, setMessage }) {
     void loadExams();
     void loadStudents();
   }, [session?.id]);
+
+  useEffect(() => {
+    void loadQuestionBank(questionBankSearch, questionBankPage);
+  }, [questionBankPage, questionBankSearch]);
 
   useEffect(() => {
     if (!activeExamId) {
@@ -181,6 +196,27 @@ export default function AdminPage({ session, onLogout, setMessage }) {
       setAssignedActiveStudents(data.items || []);
     } catch (error) {
       setMessage(error.message);
+    }
+  }
+
+  async function loadQuestionBank(search = "", page = 1) {
+    setQuestionBankLoading(true);
+    try {
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: "12"
+      });
+      if (search.trim()) {
+        params.set("search", search.trim());
+      }
+
+      const data = await api(`/api/exams/question-bank/questions?${params.toString()}`);
+      setQuestionBankItems(data.items || []);
+      setQuestionBankPagination(data.pagination || { page: 1, limit: 12, total: 0, totalPages: 1 });
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setQuestionBankLoading(false);
     }
   }
 
@@ -381,6 +417,7 @@ export default function AdminPage({ session, onLogout, setMessage }) {
 
     const normalized = normalizeQuestion({
       ...draftQuestion,
+      courseCodeTag: quiz.courseCode.trim().toUpperCase(),
       correctAnswer:
         draftQuestion.questionType === "msq"
           ? draftQuestion.correctAnswer.filter((answer) => draftQuestion.options.map((option) => option.trim()).includes(answer))
@@ -398,6 +435,34 @@ export default function AdminPage({ session, onLogout, setMessage }) {
 
   function removeQuestion(index) {
     setQuestions((current) => current.filter((_, questionIndex) => questionIndex !== index));
+  }
+
+  function addQuestionFromBank(question) {
+    setQuestions((current) => {
+      const alreadyAdded = current.some(
+        (item) =>
+          (item.sourceQuestionId && item.sourceQuestionId === question.id) ||
+          (!item.sourceQuestionId && item.prompt === question.prompt && String(item.courseCodeTag || "") === String(question.courseCodeTag || ""))
+      );
+
+      if (alreadyAdded) {
+        setMessage("That question is already included in the current quiz.");
+        return current;
+      }
+
+      return [
+        ...current,
+        normalizeQuestion({
+          ...question,
+          sourceQuestionId: question.id
+        })
+      ];
+    });
+    setErrors((current) => {
+      const next = { ...current };
+      delete next.questions;
+      return next;
+    });
   }
 
   function toggleStudent(studentId) {
@@ -893,6 +958,74 @@ export default function AdminPage({ session, onLogout, setMessage }) {
             </div>
 
             <div className="field wide">
+              <span>Reusable Question Bank</span>
+              <div className="question-bank-preview">
+                <div className="question-preview-header">
+                  <div>
+                    <strong>Search By Course Tag Or Prompt</strong>
+                    <span className="info-line">Filter questions using course code tags like DBMS101 and add them directly into this quiz.</span>
+                  </div>
+                  <button type="button" className="secondary-button" onClick={() => void loadQuestionBank(questionBankSearch, questionBankPage)} disabled={questionBankLoading}>
+                    {questionBankLoading ? "Refreshing..." : "Refresh Bank"}
+                  </button>
+                </div>
+
+                <div className="question-bank-toolbar">
+                  <input
+                    className="student-search-input"
+                    value={questionBankSearch}
+                    onChange={(event) => {
+                      setQuestionBankSearch(event.target.value);
+                      setQuestionBankPage(1);
+                    }}
+                    placeholder="Search by course code tag or question text"
+                  />
+                  <span className="info-line">
+                    Showing page {questionBankPagination.page} of {questionBankPagination.totalPages} | Total questions: {questionBankPagination.total}
+                  </span>
+                </div>
+
+                <div className="question-preview-list">
+                  {questionBankItems.length ? questionBankItems.map((question) => {
+                    const correctAnswers = Array.isArray(question.correctAnswer) ? question.correctAnswer : [question.correctAnswer];
+
+                    return (
+                      <article key={question.id} className="question-preview-card">
+                        <div className="task-card-header">
+                          <div>
+                            <strong>{question.prompt}</strong>
+                            <p className="info-line">{question.questionType.toUpperCase()} | {question.marks} mark(s)</p>
+                          </div>
+                          <button type="button" className="secondary-button" onClick={() => addQuestionFromBank(question)}>Add To Quiz</button>
+                        </div>
+                        <div className="question-tag-row">
+                          <span className="question-tag">{question.courseCodeTag || "UNTAGGED"}</span>
+                          <span className="info-line">{question.bankTitle}</span>
+                        </div>
+                        <div className="preview-options">
+                          {question.options.map((option) => (
+                            <span key={`${question.id}-${option}`} className={correctAnswers.includes(option) ? "preview-option correct" : "preview-option"}>
+                              {option}
+                            </span>
+                          ))}
+                        </div>
+                      </article>
+                    );
+                  }) : <p className="info-line">{questionBankLoading ? "Loading question bank..." : "No questions matched the current filter."}</p>}
+                </div>
+
+                <div className="pagination-row">
+                  <button type="button" className="secondary-button" onClick={() => setQuestionBankPage((current) => Math.max(1, current - 1))} disabled={questionBankPagination.page <= 1 || questionBankLoading}>
+                    Previous
+                  </button>
+                  <button type="button" className="secondary-button" onClick={() => setQuestionBankPage((current) => Math.min(questionBankPagination.totalPages, current + 1))} disabled={questionBankPagination.page >= questionBankPagination.totalPages || questionBankLoading}>
+                    Next
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="field wide">
               <span>Question Bank Preview</span>
               <div className="question-bank-preview">
                 <div className="question-preview-header">
@@ -912,6 +1045,10 @@ export default function AdminPage({ session, onLogout, setMessage }) {
                             <p className="info-line">{question.questionType.toUpperCase()} | {question.marks} mark(s)</p>
                           </div>
                           <button type="button" className="ghost-button" onClick={() => removeQuestion(index)}>Delete</button>
+                        </div>
+                        <div className="question-tag-row">
+                          <span className="question-tag">{question.courseCodeTag || quiz.courseCode.trim().toUpperCase() || "UNTAGGED"}</span>
+                          {question.sourceQuestionId ? <span className="info-line">Added from reusable bank</span> : <span className="info-line">Created in current quiz setup</span>}
                         </div>
                         <div className="preview-options">
                           {question.options.map((option) => (

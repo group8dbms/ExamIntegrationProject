@@ -534,6 +534,83 @@ function buildQuestionAutoEvaluation(question, answerMap) {
   };
 }
 
+router.get(
+  "/question-bank/questions",
+  requireAuth,
+  requireRole("admin"),
+  asyncHandler(async (req, res) => {
+    const search = String(req.query.search || "").trim().toLowerCase();
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(24, Math.max(1, Number.parseInt(req.query.limit, 10) || 12));
+    const offset = (page - 1) * limit;
+    const values = [];
+    let where = "";
+
+    if (search) {
+      values.push(`%${search}%`);
+      where = `
+        WHERE LOWER(COALESCE(q.metadata->>'courseCode', '')) LIKE $1
+           OR LOWER(q.prompt) LIKE $1
+           OR LOWER(COALESCE(qb.title, '')) LIKE $1
+      `;
+    }
+
+    values.push(limit, offset);
+
+    const countResult = await pool.query(
+      `
+        SELECT COUNT(*)::int AS total
+        FROM question q
+        LEFT JOIN question_bank qb ON qb.id = q.bank_id
+        ${where}
+      `,
+      search ? [values[0]] : []
+    );
+
+    const result = await pool.query(
+      `
+        SELECT
+          q.id,
+          q.question_type,
+          q.prompt,
+          q.options,
+          q.correct_answer,
+          q.default_marks,
+          q.metadata,
+          qb.title AS bank_title
+        FROM question q
+        LEFT JOIN question_bank qb ON qb.id = q.bank_id
+        ${where}
+        ORDER BY LOWER(COALESCE(q.metadata->>'courseCode', '')), LOWER(q.prompt)
+        LIMIT $${values.length - 1}
+        OFFSET $${values.length}
+      `,
+      values
+    );
+
+    const total = Number(countResult.rows[0]?.total || 0);
+
+    res.json({
+      items: result.rows.map((row) => ({
+        id: row.id,
+        questionType: row.question_type,
+        prompt: row.prompt,
+        options: row.options || [],
+        correctAnswer: row.correct_answer,
+        marks: Number(row.default_marks || 0),
+        courseCodeTag: row.metadata?.courseCode || "",
+        bankTitle: row.bank_title || "Question Bank"
+      })),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit))
+      }
+    });
+  })
+);
+
 async function ensureAbsentCandidatesEvaluated(client, { examId }) {
   const examMeta = await client.query(
     `
@@ -1277,7 +1354,10 @@ router.post(
               JSON.stringify(item.options || []),
               JSON.stringify(item.correctAnswer),
               Number(item.marks || 1),
-              JSON.stringify({ authoredIn: "admin_ui" })
+              JSON.stringify({
+                authoredIn: item.sourceQuestionId ? "question_bank_reused" : "admin_ui",
+                courseCode: item.courseCodeTag || courseCode
+              })
             ]
           );
 
