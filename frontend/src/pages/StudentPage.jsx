@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 
 function formatDateTime(value) {
@@ -65,6 +65,7 @@ export default function StudentPage({ session, onLogout, setMessage }) {
   const [assigned, setAssigned] = useState([]);
   const [publishedResults, setPublishedResults] = useState([]);
   const [recheckDrafts, setRecheckDrafts] = useState({});
+  const popupWatchersRef = useRef(new Map());
 
   useEffect(() => {
     void loadWorkspace();
@@ -74,6 +75,11 @@ export default function StudentPage({ session, onLogout, setMessage }) {
     function handleExamSubmitted(event) {
       if (event.origin !== window.location.origin) return;
       if (event.data?.type === "student-exam-submitted" || event.data?.type === "student-exam-closed") {
+        const activeWatcher = popupWatchersRef.current.get(event.data?.examId);
+        if (activeWatcher) {
+          window.clearInterval(activeWatcher.intervalId);
+          popupWatchersRef.current.delete(event.data.examId);
+        }
         void loadWorkspace();
       }
     }
@@ -81,6 +87,11 @@ export default function StudentPage({ session, onLogout, setMessage }) {
     window.addEventListener("message", handleExamSubmitted);
     return () => window.removeEventListener("message", handleExamSubmitted);
   }, [session?.id]);
+
+  useEffect(() => () => {
+    popupWatchersRef.current.forEach((watcher) => window.clearInterval(watcher.intervalId));
+    popupWatchersRef.current.clear();
+  }, []);
 
   async function loadWorkspace() {
     await Promise.all([loadAssigned(), loadPublishedResults()]);
@@ -105,7 +116,30 @@ export default function StudentPage({ session, onLogout, setMessage }) {
     }
   }
 
-  function startExam(examId) {
+  async function closeAttemptFromParent(examId, attemptNo) {
+    try {
+      await api("/api/submissions/close-attempt", {
+        method: "POST",
+        body: JSON.stringify({
+          examId,
+          attemptNo,
+          currentAnswers: {},
+          reason: "window_closed"
+        })
+      });
+      setMessage("Exam window was closed. This attempt is now locked and cannot be restarted.");
+      await loadAssigned();
+    } catch (error) {
+      if (String(error.message || "").includes("already been submitted") || String(error.message || "").includes("already closed")) {
+        await loadAssigned();
+        return;
+      }
+      setMessage(error.message);
+    }
+  }
+
+  function startExam(item) {
+    const examId = item.id;
     const url = new URL(window.location.href);
     url.search = `mode=exam&examId=${encodeURIComponent(examId)}`;
     const popup = window.open(url.toString(), `exam-window-${examId}`, "popup=yes,width=1440,height=920,resizable=yes,scrollbars=yes");
@@ -113,6 +147,21 @@ export default function StudentPage({ session, onLogout, setMessage }) {
       setMessage("Popup blocked. Allow popups for this site to start the exam window.");
       return;
     }
+
+    const previousWatcher = popupWatchersRef.current.get(examId);
+    if (previousWatcher) {
+      window.clearInterval(previousWatcher.intervalId);
+    }
+
+    const intervalId = window.setInterval(() => {
+      if (!popup.closed) return;
+
+      window.clearInterval(intervalId);
+      popupWatchersRef.current.delete(examId);
+      void closeAttemptFromParent(examId, item.attempt_no);
+    }, 1000);
+
+    popupWatchersRef.current.set(examId, { popup, intervalId });
     popup.focus();
     setMessage("Exam window opened. Countdown and integrity monitoring start inside that window.");
   }
@@ -165,7 +214,7 @@ export default function StudentPage({ session, onLogout, setMessage }) {
               className={state.tone === "success" ? "start-button success" : state.tone === "danger" ? "start-button danger" : "start-button muted"}
               type="button"
               disabled={state.disabled}
-              onClick={() => startExam(item.id)}
+              onClick={() => startExam(item)}
             >
               {state.label}
             </button>

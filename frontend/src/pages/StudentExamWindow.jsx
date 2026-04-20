@@ -34,6 +34,8 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   const [integrityInfo, setIntegrityInfo] = useState({ tabSwitches: 0, copyAttempts: 0, pasteAttempts: 0, ipAddress: null, integrityScore: 0, caseStatus: "clear", submissionHashVerified: false });
   const [localWarning, setLocalWarning] = useState("");
   const [warningVersion, setWarningVersion] = useState(0);
+  const [manualAutosaveNotice, setManualAutosaveNotice] = useState("");
+  const [manualAutosaveVersion, setManualAutosaveVersion] = useState(0);
   const examPaperRef = useRef(null);
   const answersRef = useRef({});
   const autosaveRef = useRef(null);
@@ -257,6 +259,14 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     }
   }
 
+  function showManualAutosaveNotice(message) {
+    setManualAutosaveNotice(message);
+    setManualAutosaveVersion((current) => current + 1);
+    window.setTimeout(() => {
+      setManualAutosaveNotice((current) => (current === message ? "" : current));
+    }, 2500);
+  }
+
   function closeAttemptInBackground(reason) {
     const activeExamPaper = examPaperRef.current;
     const token = sessionTokenRef.current;
@@ -284,11 +294,11 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     }
   }
 
-  async function autosaveAnswers(currentAnswers = answers) {
+  async function autosaveAnswers(currentAnswers = answers, { manual = false } = {}) {
     const activeExamPaper = examPaperRef.current;
     if (!activeExamPaper || submittedRef.current) return;
     try {
-      await api("/api/submissions/autosave", {
+      const response = await api("/api/submissions/autosave", {
         method: "POST",
         body: JSON.stringify({
           examId: activeExamPaper.exam.id,
@@ -298,6 +308,9 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
           currentAnswers
         })
       });
+      if (manual) {
+        showManualAutosaveNotice(`Autosave successful. Version ${response.autosave_version} saved.`);
+      }
     } catch {
       // Avoid interrupting the exam flow for autosave retries.
     }
@@ -408,13 +421,20 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
         </div>
       </> : null}
 
+      {manualAutosaveNotice ? (
+        <div key={`autosave-${manualAutosaveVersion}`} className="local-success-toast" role="status" aria-live="polite">
+          <strong>Autosave complete</strong>
+          <span>{manualAutosaveNotice}</span>
+        </div>
+      ) : null}
+
       <div className="exam-window-grid">
         <div className="task-card exam-guidance-card">
           <h3>Exam Rules</h3>
           <p className="info-line">Do not switch tabs, copy, or paste. Integrity events are recorded in real time and reviewed later by the proctor.</p>
           <p className="info-line">Current IP: {integrityInfo.ipAddress || "Checking..."}</p>
           <p className="info-line">Submission hash verified: {integrityInfo.submissionHashVerified ? "Yes" : "Pending final verification"}</p>
-          <button type="button" className="secondary-button" onClick={() => autosaveAnswers()}>Save Progress</button>
+          <button type="button" className="secondary-button" onClick={() => autosaveAnswers(undefined, { manual: true })}>Save Progress</button>
         </div>
 
         <form className="task-card single-column" onSubmit={(event) => { event.preventDefault(); void submitExam(false); }}>
@@ -441,7 +461,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
           </div>
           <div className="form-actions">
             <button className="primary-button" type="submit">Submit Exam</button>
-            <button type="button" className="ghost-button" onClick={() => autosaveAnswers()}>Autosave Now</button>
+            <button type="button" className="ghost-button" onClick={() => autosaveAnswers(undefined, { manual: true })}>Autosave Now</button>
           </div>
         </form>
       </div>

@@ -1042,6 +1042,34 @@ code {
   line-height: 1.45;
 }
 
+.local-success-toast {
+  position: fixed;
+  top: 1.2rem;
+  right: 1.2rem;
+  z-index: 50;
+  width: min(420px, calc(100vw - 2rem));
+  display: grid;
+  gap: 0.3rem;
+  padding: 1rem 1.1rem;
+  border-radius: 20px;
+  border: 1px solid rgba(116, 224, 170, 0.4);
+  background: linear-gradient(180deg, rgba(12, 62, 44, 0.97), rgba(9, 39, 29, 0.95));
+  box-shadow: 0 24px 60px rgba(2, 12, 18, 0.32);
+  animation: localWarningPulse 0.55s ease, localWarningFloat 5s ease-in-out infinite;
+}
+
+.local-success-toast strong {
+  color: #b8ffd7;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 0.78rem;
+}
+
+.local-success-toast span {
+  color: #effff6;
+  line-height: 1.45;
+}
+
 @keyframes localWarningPulse {
   0% {
     opacity: 0;
@@ -1065,6 +1093,12 @@ code {
 
 @media (max-width: 780px) {
   .local-warning-toast {
+    left: 1rem;
+    right: 1rem;
+    width: auto;
+  }
+
+  .local-success-toast {
     left: 1rem;
     right: 1rem;
     width: auto;
