@@ -10,7 +10,6 @@ async function loadAttemptContext(client, examId, studentId, attemptNo) {
   const result = await client.query(
     `
       SELECT
-        ec.id,
         ec.status,
         ec.started_at,
         ec.submitted_at,
@@ -29,6 +28,78 @@ async function loadAttemptContext(client, examId, studentId, attemptNo) {
   }
 
   return result.rows[0];
+}
+
+async function closeAttempt({ client, examId, studentId, attemptNo, currentAnswers, actorUserId, ipAddress, reason }) {
+  const attempt = await loadAttemptContext(client, examId, studentId, attemptNo);
+  if (!attempt) {
+    return { statusCode: 404, body: { message: "Assigned exam attempt not found for this student." } };
+  }
+
+  if (attempt.submitted_at || attempt.status === "submitted") {
+    return { statusCode: 400, body: { message: "This exam attempt has already been submitted." } };
+  }
+
+  if (attempt.status === "closed") {
+    return { statusCode: 200, body: { message: "This exam attempt is already closed." } };
+  }
+
+  const savedSubmission = await client.query(
+    `
+      INSERT INTO answer_submission (
+        exam_id,
+        student_id,
+        attempt_no,
+        current_answers,
+        autosave_version,
+        status
+      )
+      VALUES ($1, $2, $3, $4::jsonb, 1, 'in_progress')
+      ON CONFLICT (exam_id, student_id, attempt_no)
+      DO UPDATE SET
+        current_answers = EXCLUDED.current_answers,
+        autosave_version = answer_submission.autosave_version + 1,
+        updated_at = NOW()
+      RETURNING *
+    `,
+    [examId, studentId, attemptNo, JSON.stringify(currentAnswers || {})]
+  );
+
+  await client.query(
+    `
+      UPDATE exam_candidate
+         SET status = 'closed',
+             submitted_at = NULL
+       WHERE exam_id = $1
+         AND student_id = $2
+         AND attempt_no = $3
+    `,
+    [examId, studentId, attemptNo]
+  );
+
+  await writeAuditLog(client, {
+    actorUserId,
+    actorRole: "student",
+    action: "exam_window_closed",
+    entityType: "exam_candidate",
+    entityId: null,
+    ipAddress,
+    details: {
+      examId,
+      studentId,
+      attemptNo,
+      reason,
+      autosaveVersion: savedSubmission.rows[0]?.autosave_version ?? null
+    }
+  });
+
+  return {
+    statusCode: 200,
+    body: {
+      message: "Exam attempt closed and locked.",
+      submission: savedSubmission.rows[0]
+    }
+  };
 }
 
 router.post(
@@ -61,6 +132,10 @@ router.post(
       if (now < new Date(attempt.start_at)) {
         await client.query("ROLLBACK");
         return res.status(400).json({ message: "This exam has not started yet." });
+      }
+      if (attempt.status === "closed") {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ message: "This exam attempt was closed and cannot be restarted." });
       }
       if (attempt.submitted_at || attempt.status === "submitted") {
         await client.query("ROLLBACK");
@@ -176,6 +251,14 @@ router.post(
         await client.query("ROLLBACK");
         return res.status(400).json({ message: "This exam has not started yet." });
       }
+      if (attempt.status === "closed") {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ message: "This exam attempt was closed and cannot be restarted." });
+      }
+      if (attempt.submitted_at || attempt.status === "submitted") {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ message: "This exam attempt has already been submitted." });
+      }
 
       if (!attempt.started_at) {
         if (now > new Date(attempt.end_at)) {
@@ -249,6 +332,52 @@ router.post(
 
       await client.query("COMMIT");
       res.json(submissionResult.rows[0]);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  })
+);
+
+router.post(
+  "/close-attempt",
+  requireAuth,
+  requireRole("student"),
+  asyncHandler(async (req, res) => {
+    const { examId, attemptNo = 1, currentAnswers = {}, reason = "window_closed" } = req.body;
+    const studentId = req.user.id;
+    const actorUserId = req.user.id;
+
+    if (!examId) {
+      return res.status(400).json({
+        message: "examId is required."
+      });
+    }
+
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+      const result = await closeAttempt({
+        client,
+        examId,
+        studentId,
+        attemptNo,
+        currentAnswers,
+        actorUserId,
+        ipAddress: req.ip,
+        reason
+      });
+
+      if (result.statusCode >= 400) {
+        await client.query("ROLLBACK");
+        return res.status(result.statusCode).json(result.body);
+      }
+
+      await client.query("COMMIT");
+      return res.status(result.statusCode).json(result.body);
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;

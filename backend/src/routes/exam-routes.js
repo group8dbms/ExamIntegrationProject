@@ -504,6 +504,10 @@ router.get(
           return res.status(400).json({ message: "This exam has not started yet." });
         }
 
+        if (examRow.candidate_status === "closed") {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ message: "This exam attempt was closed and cannot be restarted." });
+        }
         if (examRow.submitted_at || examRow.candidate_status === "submitted") {
           await client.query("ROLLBACK");
           return res.status(400).json({ message: "This exam attempt has already been submitted." });

@@ -9,7 +9,7 @@ BEGIN
     END IF;
 
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'submission_status') THEN
-        CREATE TYPE submission_status AS ENUM ('in_progress', 'submitted', 'late_submitted', 'under_review', 'graded');
+        CREATE TYPE submission_status AS ENUM ('in_progress', 'submitted', 'late_submitted', 'under_review', 'graded', 'closed');
     END IF;
 
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'integrity_event_type') THEN

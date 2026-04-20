@@ -96,6 +96,9 @@ export default function App() {
       if (event.data?.type === "student-exam-submitted") {
         setMessage("Exam submission received. Student dashboard refreshed.");
       }
+      if (event.data?.type === "student-exam-closed") {
+        setMessage("Exam window closed. The attempt has been locked and cannot be restarted.");
+      }
     }
 
     window.addEventListener("message", handleStudentExamSubmitted);

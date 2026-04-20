@@ -45,6 +45,17 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   const tabSwitchCountRef = useRef(0);
   const copyCountRef = useRef(0);
   const pasteCountRef = useRef(0);
+  const isClosingRef = useRef(false);
+  const sessionTokenRef = useRef("");
+
+  useEffect(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem("exam-integrity-session") || "null");
+      sessionTokenRef.current = stored?.token || "";
+    } catch {
+      sessionTokenRef.current = "";
+    }
+  }, []);
 
   useEffect(() => {
     void loadExamWindow();
@@ -71,6 +82,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     window.removeEventListener("copy", handleCopyAttempt);
     window.removeEventListener("paste", handlePasteAttempt);
     window.removeEventListener("beforeunload", handleBeforeUnload);
+    window.removeEventListener("pagehide", handlePageHide);
   }
 
   async function loadExamWindow() {
@@ -100,6 +112,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
       window.addEventListener("copy", handleCopyAttempt);
       window.addEventListener("paste", handlePasteAttempt);
       window.addEventListener("beforeunload", handleBeforeUnload);
+      window.addEventListener("pagehide", handlePageHide);
 
       timerRef.current = window.setInterval(() => {
         setTimeLeft((current) => {
@@ -230,9 +243,44 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     void logIntegrityEvent("paste_attempt", { count: pasteCountRef.current }, 2);
   }
 
-  function handleBeforeUnload() {
+  function handleBeforeUnload(event) {
+    if (submittedRef.current) return;
+
+    event.preventDefault();
+    event.returnValue = "Closing the exam window will permanently close this attempt.";
+    void autosaveAnswers(answersRef.current);
+  }
+
+  function handlePageHide() {
     if (!submittedRef.current) {
-      void autosaveAnswers(answersRef.current);
+      closeAttemptInBackground(isClosingRef.current ? "manual_close" : "window_closed");
+    }
+  }
+
+  function closeAttemptInBackground(reason) {
+    const activeExamPaper = examPaperRef.current;
+    const token = sessionTokenRef.current;
+    if (!activeExamPaper || !token || submittedRef.current) return;
+
+    const payload = JSON.stringify({
+      examId: activeExamPaper.exam.id,
+      attemptNo: activeExamPaper.exam.attempt_no,
+      currentAnswers: answersRef.current,
+      reason
+    });
+
+    try {
+      fetch("/api/submissions/close-attempt", {
+        method: "POST",
+        keepalive: true,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: payload
+      }).catch(() => null);
+    } catch {
+      // Ignore close-attempt transport errors during unload.
     }
   }
 
@@ -294,6 +342,40 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     }
   }
 
+  async function handleCloseExam() {
+    const activeExamPaper = examPaperRef.current;
+    if (!activeExamPaper || submittedRef.current) return;
+
+    const confirmed = window.confirm("Do you really want to close this exam window? This will permanently close the attempt and you will not be allowed to restart it.");
+    if (!confirmed) return;
+
+    submittedRef.current = true;
+    isClosingRef.current = true;
+    cleanupRuntime();
+
+    try {
+      await api("/api/submissions/close-attempt", {
+        method: "POST",
+        body: JSON.stringify({
+          examId: activeExamPaper.exam.id,
+          attemptNo: activeExamPaper.exam.attempt_no,
+          currentAnswers: answersRef.current,
+          reason: "manual_close"
+        })
+      });
+      localStorage.removeItem(ACTIVE_ATTEMPT_KEY);
+      setMessage("Exam window closed. This attempt has been permanently marked as closed.");
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage({ type: "student-exam-closed", examId: activeExamPaper.exam.id }, window.location.origin);
+      }
+      window.setTimeout(() => onExit?.(), 500);
+    } catch (error) {
+      submittedRef.current = false;
+      isClosingRef.current = false;
+      setMessage(error.message);
+    }
+  }
+
   const examMeta = examPaper?.exam;
   const summaryText = useMemo(() => `${integrityInfo.tabSwitches} tab switches | ${integrityInfo.copyAttempts} copy attempts | ${integrityInfo.pasteAttempts} paste attempts`, [integrityInfo]);
 
@@ -314,6 +396,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
           <strong>{formatDuration(timeLeft)}</strong>
           <p>{summaryText}</p>
           <p>Integrity score: {integrityInfo.integrityScore} | Case status: {integrityInfo.caseStatus}</p>
+          <button type="button" className="ghost-button" onClick={() => void handleCloseExam()}>Close Exam</button>
         </div>
       </div>
 

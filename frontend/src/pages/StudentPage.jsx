@@ -49,6 +49,9 @@ function computeStartState(item) {
   if (item.candidate_status === "submitted") {
     return { label: "Submitted", disabled: true, tone: "muted" };
   }
+  if (item.candidate_status === "closed") {
+    return { label: "Attempt closed", disabled: true, tone: "danger" };
+  }
   if (now < startAt) {
     return { label: "Not available to start now", disabled: true, tone: "muted" };
   }
@@ -70,7 +73,7 @@ export default function StudentPage({ session, onLogout, setMessage }) {
   useEffect(() => {
     function handleExamSubmitted(event) {
       if (event.origin !== window.location.origin) return;
-      if (event.data?.type === "student-exam-submitted") {
+      if (event.data?.type === "student-exam-submitted" || event.data?.type === "student-exam-closed") {
         void loadWorkspace();
       }
     }
