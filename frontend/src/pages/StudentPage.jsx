@@ -46,6 +46,9 @@ function computeStartState(item) {
   const startAt = new Date(item.start_at).getTime();
   const endAt = new Date(item.end_at).getTime();
 
+  if (item.candidate_status === "not_appeared") {
+    return { label: "Not appeared", disabled: true, tone: "danger" };
+  }
   if (item.candidate_status === "submitted") {
     return { label: "Submitted", disabled: true, tone: "muted" };
   }

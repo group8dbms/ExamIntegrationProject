@@ -274,9 +274,12 @@ export default function EvaluatorPage({ session, onLogout, setMessage }) {
                   <strong>{item.studentName}</strong>
                   <p>{item.studentEmail}</p>
                 </div>
-                <span className={item.awardedMarks !== null && item.awardedMarks !== undefined ? "status-badge ready" : "status-badge waiting"}>{item.awardedMarks !== null && item.awardedMarks !== undefined ? "Evaluated" : "Pending"}</span>
+                <span className={item.awardedMarks !== null && item.awardedMarks !== undefined ? "status-badge ready" : "status-badge waiting"}>
+                  {item.didNotAppear ? "Not appeared" : item.awardedMarks !== null && item.awardedMarks !== undefined ? "Evaluated" : "Pending"}
+                </span>
               </div>
               <p className="info-line">Integrity score: {item.integrityScore} | Case: {item.caseStatus} | Hash verified: {item.submissionHashVerified ? "Yes" : "No"}</p>
+              {item.didNotAppear ? <p className="info-line">Auto-evaluated with 0 marks because the student did not appear before the deadline.</p> : null}
             </button>)}
             {!submissions.length && <p>No submitted scripts found for this exam.</p>}
           </div>
