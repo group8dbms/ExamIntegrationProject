@@ -284,6 +284,14 @@ code {
   background: linear-gradient(135deg, #78d7ff, #6be0b8);
 }
 
+.primary-button:disabled {
+  color: #cdd7e3;
+  background: linear-gradient(180deg, rgba(74, 86, 99, 0.88), rgba(57, 69, 81, 0.9));
+  cursor: not-allowed;
+  box-shadow: none;
+  opacity: 0.8;
+}
+
 .secondary-button,
 .ghost-button {
   color: #dce7f4;
@@ -299,6 +307,12 @@ code {
 .secondary-button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.publish-locked-button {
+  color: #cfd8e3;
+  background: rgba(58, 69, 80, 0.88);
+  border-color: rgba(137, 159, 180, 0.24);
 }
 
 .list-item {

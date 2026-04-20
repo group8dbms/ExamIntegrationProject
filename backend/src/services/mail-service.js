@@ -47,16 +47,24 @@ async function sendVerificationEmail({ toEmail, toName, verificationUrl }) {
 
 async function sendResultPublishedEmail({ toEmail, toName, examTitle, courseCode, awardedMarks, totalMarks, percentage, integrityScore, caseStatus, submissionHashVerified, thresholdBreached = false, integrityThreshold = null, resultOutcome = null }) {
   const transporter = createTransporter();
+  const normalizedOutcome = String(resultOutcome || (thresholdBreached ? "Failed due to integrity threshold breach" : "Published"));
+  const failedOutcome = normalizedOutcome.toLowerCase().includes("failed") || normalizedOutcome.toLowerCase().includes("disqualified");
+  const displayCaseStatus = caseStatus || "clear";
 
   await transporter.sendMail({
     from: env.smtpFrom,
     to: toEmail,
-    subject: `Result published: ${examTitle}`,
+    subject: `${failedOutcome ? "Failed result" : "Result published"}: ${examTitle}`,
     html: `
       <div style="font-family:Segoe UI,Arial,sans-serif;color:#102033;line-height:1.6">
         <h2>Your exam result has been published</h2>
         <p>Hello ${toName || "Student"},</p>
         <p>Your result for <strong>${examTitle}</strong> (${courseCode}) is now available.</p>
+        ${failedOutcome ? `
+          <div style="margin:16px 0;padding:14px 16px;border-radius:14px;background:#fff0f0;border:1px solid #f2b4b4;color:#7b1f1f;font-weight:600">
+            Final outcome: ${normalizedOutcome}
+          </div>
+        ` : ""}
         ${thresholdBreached ? `
           <div style="margin:16px 0;padding:14px 16px;border-radius:14px;background:#fff0f0;border:1px solid #f2b4b4;color:#7b1f1f;font-weight:600">
             An integrity case was opened due to suspicious activity, and your final penalty total crossed the exam threshold${integrityThreshold !== null ? ` (${integrityThreshold})` : ""}. This attempt has been marked as failed on integrity grounds.
@@ -67,8 +75,8 @@ async function sendResultPublishedEmail({ toEmail, toName, examTitle, courseCode
           <tr><td style="padding:10px;border:1px solid #d7e2ee">Total Marks</td><td style="padding:10px;border:1px solid #d7e2ee">${totalMarks}</td></tr>
           <tr><td style="padding:10px;border:1px solid #d7e2ee">Percentage</td><td style="padding:10px;border:1px solid #d7e2ee">${percentage}%</td></tr>
           <tr><td style="padding:10px;border:1px solid #d7e2ee">Integrity Score</td><td style="padding:10px;border:1px solid #d7e2ee">${integrityScore}</td></tr>
-          <tr><td style="padding:10px;border:1px solid #d7e2ee">Case Status</td><td style="padding:10px;border:1px solid #d7e2ee">${caseStatus || "clear"}</td></tr>
-          <tr><td style="padding:10px;border:1px solid #d7e2ee">Result Outcome</td><td style="padding:10px;border:1px solid #d7e2ee">${resultOutcome || (thresholdBreached ? "Failed due to integrity threshold breach" : "Published")}</td></tr>
+          <tr><td style="padding:10px;border:1px solid #d7e2ee">Case Status</td><td style="padding:10px;border:1px solid #d7e2ee">${displayCaseStatus}</td></tr>
+          <tr><td style="padding:10px;border:1px solid #d7e2ee">Result Outcome</td><td style="padding:10px;border:1px solid #d7e2ee">${normalizedOutcome}</td></tr>
           <tr><td style="padding:10px;border:1px solid #d7e2ee">Submission Hash Verified</td><td style="padding:10px;border:1px solid #d7e2ee">${submissionHashVerified ? "Yes" : "No"}</td></tr>
         </table>
         <p>If you believe there is an issue with your result, please contact your instructor for re-check workflow support.</p>

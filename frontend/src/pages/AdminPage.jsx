@@ -1206,13 +1206,13 @@ export default function AdminPage({ session, onLogout, setMessage }) {
           <form className="task-card single-column" onSubmit={handlePublish}>
             <Field label="Selected Exam ID"><input required value={publishExamId} onChange={(event) => setPublishExamId(event.target.value)} placeholder="Choose from the exam lists below" /></Field>
             <div className="form-actions">
-              <button type="button" className="secondary-button" onClick={handleRequestPublishApproval} disabled={!publishExamId.trim() || publishApprovalLoading || selectedPublishExam?.publish_state !== "ready_to_publish"}>
+              <button type="button" className="primary-button" onClick={handleRequestPublishApproval} disabled={!publishExamId.trim() || publishApprovalLoading || selectedPublishExam?.publish_state !== "ready_to_publish"}>
                 Request Approval
               </button>
               <button type="button" className="secondary-button" onClick={handleApprovePublishRequest} disabled={!publishApproval?.canApprove || publishApprovalLoading}>
                 Approve Request
               </button>
-              <button className="primary-button" type="submit" disabled={!publishApproval?.canPublish || publishApprovalLoading}>
+              <button className={!publishApproval?.canPublish || publishApprovalLoading ? "secondary-button publish-locked-button" : "primary-button"} type="submit" disabled={!publishApproval?.canPublish || publishApprovalLoading}>
                 Publish Results
               </button>
             </div>
