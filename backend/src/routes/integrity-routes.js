@@ -19,6 +19,25 @@ router.get(
   asyncHandler(async (req, res) => {
     const result = await pool.query(
       `
+        WITH pending_candidates AS (
+          SELECT DISTINCT
+            ie.exam_id,
+            ie.student_id,
+            ie.attempt_no
+          FROM integrity_event ie
+          LEFT JOIN LATERAL (
+            SELECT c.id, c.decision, c.closed_at
+            FROM integrity_case c
+            WHERE c.exam_id = ie.exam_id
+              AND c.student_id = ie.student_id
+              AND c.attempt_no = ie.attempt_no
+            ORDER BY c.opened_at DESC
+            LIMIT 1
+          ) latest_case ON TRUE
+          WHERE latest_case.id IS NULL
+             OR latest_case.decision IS NULL
+             OR latest_case.closed_at IS NULL
+        )
         SELECT
           e.id,
           e.title,
@@ -26,11 +45,15 @@ router.get(
           e.start_at,
           e.end_at,
           COUNT(DISTINCT ie.id) AS suspicious_event_count,
-          COUNT(DISTINCT ie.student_id) AS flagged_student_count,
+          COUNT(DISTINCT (pc.student_id, pc.attempt_no)) AS flagged_student_count,
           MAX(ie.event_time) AS last_event_at
         FROM exam e
-        JOIN integrity_event ie ON ie.exam_id = e.id
-        GROUP BY e.id
+        JOIN pending_candidates pc ON pc.exam_id = e.id
+        JOIN integrity_event ie
+          ON ie.exam_id = pc.exam_id
+         AND ie.student_id = pc.student_id
+         AND ie.attempt_no = pc.attempt_no
+        GROUP BY e.id, e.title, e.course_code, e.start_at, e.end_at
         ORDER BY last_event_at DESC NULLS LAST, e.start_at DESC
       `
     );

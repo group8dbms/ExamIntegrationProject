@@ -59,6 +59,10 @@ function formatCandidateStatus(status) {
   }
 }
 
+function hasPendingReview(student) {
+  return !student.caseId || !student.caseDecision || !student.caseClosedAt;
+}
+
 export default function ProctorPage({ session, onLogout, setMessage }) {
   const [activeView, setActiveView] = useState("monitor");
   const [liveExams, setLiveExams] = useState([]);
@@ -99,12 +103,15 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
       const data = await api("/api/integrity/live-exams");
       const items = data.items || [];
       setLiveExams(items);
-      if (!selectedExamId && items.length) {
-        setSelectedExamId(items[0].id);
-        await loadExamLogs(items[0].id, false);
+      if (selectedExamId && !items.some((item) => item.id === selectedExamId)) {
+        setSelectedExamId("");
+        setSelectedExam(null);
+        setStudentLogs([]);
+        setPenaltyDrafts({});
+        setDecisionDrafts({});
       }
       if (announce) {
-        setMessage(items.length ? `Loaded ${items.length} exam(s) with suspicious activity logs.` : "No suspicious activity logs found right now.");
+        setMessage(items.length ? `Loaded ${items.length} exam(s) with pending suspicious activity review.` : "No pending suspicious activity reviews found right now.");
       }
     } catch (error) {
       setMessage(error.message);
@@ -296,7 +303,7 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
                 <p className="info-line">Window: {formatDateTime(exam.start_at)} to {formatDateTime(exam.end_at)}</p>
                 <p className="info-line">Last event: {formatDateTime(exam.last_event_at)}</p>
               </button>)}
-              {!liveExams.length && <p>No exams have suspicious activity logs right now.</p>}
+              {!liveExams.length && <p>No exams have pending suspicious activity review right now.</p>}
             </div>
           </div>
 
@@ -308,7 +315,7 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
               </div>
             </div>
             <div className="proctor-student-board">
-              {studentCards.map((student) => {
+              {selectedExamId ? studentCards.filter(hasPendingReview).map((student) => {
                 const studentKey = student.key;
                 const decisionDraft = decisionDrafts[studentKey] || createDecisionDraft(session?.id, student);
                 return (
@@ -425,8 +432,8 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
                     </form>
                   </article>
                 );
-              })}
-              {!studentCards.length && <p>No suspicious logs recorded for this exam yet.</p>}
+              }) : <p>Select an exam to review pending student cases.</p>}
+              {selectedExamId && !studentCards.filter(hasPendingReview).length && <p>All flagged students for this exam already have completed proctor decisions.</p>}
             </div>
           </div>
         </div>
