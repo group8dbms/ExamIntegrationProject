@@ -49,6 +49,9 @@ CREATE TABLE IF NOT EXISTS app_user (
     full_name TEXT NOT NULL,
     role user_role NOT NULL,
     password_hash TEXT,
+    password_reset_token_hash TEXT,
+    password_reset_sent_at TIMESTAMPTZ,
+    password_reset_expires_at TIMESTAMPTZ,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

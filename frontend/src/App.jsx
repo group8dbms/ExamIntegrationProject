@@ -35,6 +35,7 @@ export default function App() {
   const [errors, setErrors] = useState({});
   const [staffLogin, setStaffLogin] = useState({ email: "", password: "", role: "admin" });
   const [studentAccess, setStudentAccess] = useState({ fullName: "", email: "", password: "" });
+  const [studentReset, setStudentReset] = useState({ token: "", email: "", password: "", confirmPassword: "" });
   const [studentMode, setStudentMode] = useState("login");
   const [studentPanelMessage, setStudentPanelMessage] = useState("Enter your email and password. New students will be guided into registration automatically.");
 
@@ -74,18 +75,37 @@ export default function App() {
     const verified = params.get("verified");
     const role = params.get("role");
     const email = params.get("email");
+    const resetMode = params.get("reset");
+    const resetToken = params.get("token");
+    const resetStatus = params.get("resetStatus");
 
     if (role === "student" && verified === "success") {
       setMessage(`Email verified successfully for ${email || "student"}. You can now log in.`);
       setStudentPanelMessage("Email verified. Continue with your email and password to enter the student dashboard.");
       setStudentMode("login");
       if (email) setStudentAccess((current) => ({ ...current, email }));
+      setStudentReset((current) => ({ ...current, email: email || current.email }));
       window.history.replaceState({}, "", "/");
     }
 
     if (role === "student" && verified === "invalid") {
       setMessage("The verification link is invalid or expired. Try student access again to resend the email.");
       setStudentPanelMessage("Verification link invalid or expired. Enter email and password again to resend verification.");
+      window.history.replaceState({}, "", "/");
+    }
+
+    if (resetMode === "student" && resetToken) {
+      setStudentMode("reset");
+      setStudentPanelMessage("Choose a new password for your student account.");
+      setStudentReset((current) => ({ ...current, token: resetToken, email: email || current.email }));
+      setMessage("Reset link received. Set a new password to continue.");
+      window.history.replaceState({}, "", "/");
+    }
+
+    if (resetStatus === "invalid") {
+      setStudentMode("forgot");
+      setStudentPanelMessage("That reset link is invalid or expired. Request a fresh password reset email.");
+      setMessage("Password reset link is invalid or expired.");
       window.history.replaceState({}, "", "/");
     }
   }, []);
@@ -158,6 +178,61 @@ export default function App() {
         setMessage(error.message);
         setErrors((current) => ({ ...current, studentFullName: "Full name is required for new student registration." }));
         return;
+      }
+      setStudentPanelMessage(error.message);
+      setMessage(error.message);
+    }
+  }
+
+  async function handleForgotPassword(event) {
+    event.preventDefault();
+    const next = {};
+    if (!studentAccess.email.trim()) next.studentEmail = "Student email is required.";
+    setErrors((current) => ({ ...current, ...next }));
+    if (Object.keys(next).length) return;
+
+    try {
+      const data = await api("/api/auth/forgot-password", {
+        method: "POST",
+        body: JSON.stringify({ email: studentAccess.email.trim() })
+      });
+      setStudentMode("login");
+      setStudentPanelMessage(data.message);
+      setMessage(data.message);
+    } catch (error) {
+      setStudentPanelMessage(error.message);
+      setMessage(error.message);
+    }
+  }
+
+  async function handleResetPassword(event) {
+    event.preventDefault();
+    const next = {};
+    if (!studentReset.password.trim()) next.resetPassword = "New password is required.";
+    if (!studentReset.confirmPassword.trim()) next.resetConfirmPassword = "Please confirm the new password.";
+    if (studentReset.password && studentReset.confirmPassword && studentReset.password !== studentReset.confirmPassword) {
+      next.resetConfirmPassword = "Passwords do not match.";
+    }
+    setErrors((current) => ({ ...current, ...next }));
+    if (Object.keys(next).length) return;
+
+    try {
+      const data = await api("/api/auth/reset-password", {
+        method: "POST",
+        body: JSON.stringify({
+          token: studentReset.token,
+          password: studentReset.password,
+          confirmPassword: studentReset.confirmPassword
+        })
+      });
+      setStudentMode("login");
+      setStudentAccess((current) => ({ ...current, email: data.email || studentReset.email, password: "" }));
+      setStudentReset({ token: "", email: data.email || studentReset.email, password: "", confirmPassword: "" });
+      setStudentPanelMessage(data.message);
+      setMessage(data.message);
+    } catch (error) {
+      if (error.status === 400 && /invalid|expired/i.test(error.message)) {
+        setStudentMode("forgot");
       }
       setStudentPanelMessage(error.message);
       setMessage(error.message);
@@ -237,28 +312,113 @@ export default function App() {
             <div className="portal-card student-card">
               <div className="portal-card-header">
                 <p className="eyebrow">Student Access</p>
-                <h2>{studentMode === "register" ? "Complete Registration" : "Register or Login"}</h2>
+                <h2>
+                  {studentMode === "register"
+                    ? "Complete Registration"
+                    : studentMode === "forgot"
+                      ? "Forgot Password"
+                      : studentMode === "reset"
+                        ? "Reset Password"
+                        : "Register or Login"}
+                </h2>
               </div>
-              <form className="portal-stack" onSubmit={handleStudentAccess}>
-                <Field label="Student Email" error={errors.studentEmail}>
-                  <input type="email" value={studentAccess.email} onChange={(event) => setStudentAccess({ ...studentAccess, email: event.target.value })} placeholder="student@college.edu" />
-                </Field>
-                <Field label="Password" error={errors.studentPassword}>
-                  <input type="password" value={studentAccess.password} onChange={(event) => setStudentAccess({ ...studentAccess, password: event.target.value })} placeholder="StudentPass9" />
-                </Field>
-                {studentMode === "register" && (
-                  <Field label="Full Name" error={errors.studentFullName} hint="Required only for first-time registration.">
-                    <input value={studentAccess.fullName} onChange={(event) => setStudentAccess({ ...studentAccess, fullName: event.target.value })} placeholder="Ananya Rao" />
+              {studentMode === "reset" ? (
+                <form className="portal-stack" onSubmit={handleResetPassword}>
+                  <Field label="Student Email">
+                    <input value={studentReset.email} readOnly disabled />
                   </Field>
-                )}
-                <div className="form-actions">
-                  <button className="primary-button" type="submit">Continue as Student</button>
-                </div>
-                <div className="student-inline-message">
-                  <span className="status-label">Student Flow</span>
-                  <p>{studentPanelMessage}</p>
-                </div>
-              </form>
+                  <Field label="New Password" error={errors.resetPassword}>
+                    <input type="password" value={studentReset.password} onChange={(event) => setStudentReset({ ...studentReset, password: event.target.value })} placeholder="NewStudentPass9" />
+                  </Field>
+                  <Field label="Confirm Password" error={errors.resetConfirmPassword}>
+                    <input type="password" value={studentReset.confirmPassword} onChange={(event) => setStudentReset({ ...studentReset, confirmPassword: event.target.value })} placeholder="NewStudentPass9" />
+                  </Field>
+                  <div className="form-actions split-actions">
+                    <button className="primary-button" type="submit">Save New Password</button>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => {
+                        setStudentMode("login");
+                        setStudentPanelMessage("Enter your email and password to continue.");
+                      }}
+                    >
+                      Back to Login
+                    </button>
+                  </div>
+                  <div className="student-inline-message">
+                    <span className="status-label">Student Flow</span>
+                    <p>{studentPanelMessage}</p>
+                  </div>
+                </form>
+              ) : studentMode === "forgot" ? (
+                <form className="portal-stack" onSubmit={handleForgotPassword}>
+                  <Field label="Student Email" error={errors.studentEmail}>
+                    <input type="email" value={studentAccess.email} onChange={(event) => setStudentAccess({ ...studentAccess, email: event.target.value })} placeholder="student@college.edu" />
+                  </Field>
+                  <div className="form-actions split-actions">
+                    <button className="primary-button" type="submit">Send Reset Link</button>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => {
+                        setStudentMode("login");
+                        setStudentPanelMessage("Enter your email and password. New students will be guided into registration automatically.");
+                      }}
+                    >
+                      Back to Login
+                    </button>
+                  </div>
+                  <div className="student-inline-message">
+                    <span className="status-label">Student Flow</span>
+                    <p>{studentPanelMessage}</p>
+                  </div>
+                </form>
+              ) : (
+                <form className="portal-stack" onSubmit={handleStudentAccess}>
+                  <Field label="Student Email" error={errors.studentEmail}>
+                    <input type="email" value={studentAccess.email} onChange={(event) => setStudentAccess({ ...studentAccess, email: event.target.value })} placeholder="student@college.edu" />
+                  </Field>
+                  <Field label="Password" error={errors.studentPassword}>
+                    <input type="password" value={studentAccess.password} onChange={(event) => setStudentAccess({ ...studentAccess, password: event.target.value })} placeholder="StudentPass9" />
+                  </Field>
+                  {studentMode === "register" && (
+                    <Field label="Full Name" error={errors.studentFullName} hint="Required only for first-time registration.">
+                      <input value={studentAccess.fullName} onChange={(event) => setStudentAccess({ ...studentAccess, fullName: event.target.value })} placeholder="Ananya Rao" />
+                    </Field>
+                  )}
+                  <div className="form-actions split-actions">
+                    <button className="primary-button" type="submit">Continue as Student</button>
+                    {studentMode === "login" ? (
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => {
+                          setStudentMode("forgot");
+                          setStudentPanelMessage("Enter your verified student email to receive a password reset link.");
+                        }}
+                      >
+                        Forgot Password
+                      </button>
+                    ) : (
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => {
+                          setStudentMode("login");
+                          setStudentPanelMessage("Enter your email and password. New students will be guided into registration automatically.");
+                        }}
+                      >
+                        Back to Login
+                      </button>
+                    )}
+                  </div>
+                  <div className="student-inline-message">
+                    <span className="status-label">Student Flow</span>
+                    <p>{studentPanelMessage}</p>
+                  </div>
+                </form>
+              )}
             </div>
           </section>
         )}

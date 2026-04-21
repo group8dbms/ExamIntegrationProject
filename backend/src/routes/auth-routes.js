@@ -1,13 +1,15 @@
 const express = require("express");
+const crypto = require("crypto");
 const asyncHandler = require("../middleware/async-handler");
 const pool = require("../db/pool");
 const env = require("../config/env");
 const { writeAuditLog } = require("../services/audit-service");
 const { hashPassword, verifyPassword, generateToken } = require("../services/password-service");
-const { isMailConfigured, sendVerificationEmail } = require("../services/mail-service");
+const { isMailConfigured, sendVerificationEmail, sendPasswordResetEmail } = require("../services/mail-service");
 const { createAuthToken } = require("../services/auth-token-service");
 
 const router = express.Router();
+let passwordResetSchemaPromise = null;
 
 function serializeUser(user) {
   return {
@@ -26,6 +28,32 @@ async function sendStudentVerification({ req, email, fullName, token }) {
     toEmail: email,
     toName: fullName,
     verificationUrl
+  });
+}
+
+function hashResetToken(token) {
+  return crypto.createHash("sha256").update(String(token || "")).digest("hex");
+}
+
+async function ensurePasswordResetSchema() {
+  if (!passwordResetSchemaPromise) {
+    passwordResetSchemaPromise = pool.query(`
+      ALTER TABLE app_user
+        ADD COLUMN IF NOT EXISTS password_reset_token_hash TEXT,
+        ADD COLUMN IF NOT EXISTS password_reset_sent_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS password_reset_expires_at TIMESTAMPTZ;
+    `);
+  }
+
+  return passwordResetSchemaPromise;
+}
+
+async function sendStudentPasswordReset({ email, fullName, token }) {
+  const resetUrl = `${env.frontendUrl}/?reset=student&token=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`;
+  await sendPasswordResetEmail({
+    toEmail: email,
+    toName: fullName,
+    resetUrl
   });
 }
 
@@ -97,6 +125,7 @@ router.post(
 router.post(
   "/student-access",
   asyncHandler(async (req, res) => {
+    await ensurePasswordResetSchema();
     const { email, password, fullName = "" } = req.body;
 
     if (!email || !password) {
@@ -236,6 +265,155 @@ router.get(
     }
 
     return res.redirect(`${env.frontendUrl}/?verified=success&role=${encodeURIComponent(redirect)}&email=${encodeURIComponent(result.rows[0].email)}`);
+  })
+);
+
+router.post(
+  "/forgot-password",
+  asyncHandler(async (req, res) => {
+    await ensurePasswordResetSchema();
+
+    if (!isMailConfigured()) {
+      return res.status(500).json({ message: "Password reset email is not configured yet. Add SMTP settings in backend/.env first." });
+    }
+
+    const email = String(req.body?.email || "").trim();
+    if (!email) {
+      return res.status(400).json({ message: "email is required." });
+    }
+
+    const genericMessage = "If this student account exists, a password reset link has been sent to the registered email.";
+    const result = await pool.query(
+      `
+        SELECT id, email, full_name, role, is_active, email_verified
+        FROM app_user
+        WHERE email = $1
+      `,
+      [email]
+    );
+
+    if (!result.rows.length) {
+      return res.json({ message: genericMessage });
+    }
+
+    const user = result.rows[0];
+    if (user.role !== "student" || !user.is_active || !user.email_verified) {
+      return res.json({ message: genericMessage });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const token = generateToken();
+      await client.query(
+        `
+          UPDATE app_user
+             SET password_reset_token_hash = $1,
+                 password_reset_sent_at = NOW(),
+                 password_reset_expires_at = NOW() + INTERVAL '30 minutes',
+                 updated_at = NOW()
+           WHERE id = $2
+        `,
+        [hashResetToken(token), user.id]
+      );
+
+      await sendStudentPasswordReset({
+        email: user.email,
+        fullName: user.full_name,
+        token
+      });
+
+      await writeAuditLog(client, {
+        actorUserId: user.id,
+        actorRole: "student",
+        action: "student_password_reset_requested",
+        entityType: "app_user",
+        entityId: user.id,
+        ipAddress: req.ip,
+        details: { email: user.email }
+      });
+
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    return res.json({ message: genericMessage });
+  })
+);
+
+router.post(
+  "/reset-password",
+  asyncHandler(async (req, res) => {
+    await ensurePasswordResetSchema();
+
+    const token = String(req.body?.token || "").trim();
+    const password = String(req.body?.password || "");
+    const confirmPassword = String(req.body?.confirmPassword || "");
+
+    if (!token || !password || !confirmPassword) {
+      return res.status(400).json({ message: "token, password, and confirmPassword are required." });
+    }
+
+    if (password !== confirmPassword) {
+      return res.status(400).json({ message: "Passwords do not match." });
+    }
+
+    if (password.length < 8) {
+      return res.status(400).json({ message: "Password must be at least 8 characters long." });
+    }
+
+    const tokenHash = hashResetToken(token);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        `
+          UPDATE app_user
+             SET password_hash = $1,
+                 password_reset_token_hash = NULL,
+                 password_reset_sent_at = NULL,
+                 password_reset_expires_at = NULL,
+                 updated_at = NOW()
+           WHERE password_reset_token_hash = $2
+             AND password_reset_expires_at IS NOT NULL
+             AND password_reset_expires_at > NOW()
+             AND role = 'student'
+             AND is_active = TRUE
+           RETURNING id, email, full_name, role, email_verified
+        `,
+        [hashPassword(password), tokenHash]
+      );
+
+      if (!result.rows.length) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ message: "This reset link is invalid or has expired." });
+      }
+
+      await writeAuditLog(client, {
+        actorUserId: result.rows[0].id,
+        actorRole: "student",
+        action: "student_password_reset_completed",
+        entityType: "app_user",
+        entityId: result.rows[0].id,
+        ipAddress: req.ip,
+        details: { email: result.rows[0].email }
+      });
+
+      await client.query("COMMIT");
+      return res.json({
+        message: "Password reset successful. You can now log in with the new password.",
+        email: result.rows[0].email
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   })
 );
 

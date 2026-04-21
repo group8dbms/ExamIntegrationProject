@@ -90,6 +90,31 @@ async function sendResultPublishedEmail({ toEmail, toName, examTitle, courseCode
   });
 }
 
+async function sendPasswordResetEmail({ toEmail, toName, resetUrl }) {
+  const transporter = createTransporter();
+
+  await transporter.sendMail({
+    from: env.smtpFrom,
+    to: toEmail,
+    subject: "Reset your student password",
+    html: `
+      <div style="font-family:Segoe UI,Arial,sans-serif;color:#102033;line-height:1.6">
+        <h2>Reset your password</h2>
+        <p>Hello ${toName || "Student"},</p>
+        <p>We received a request to reset your student password. Use the button below to choose a new password.</p>
+        <p>
+          <a href="${resetUrl}" style="display:inline-block;padding:12px 18px;background:#0f8bd7;color:#ffffff;text-decoration:none;border-radius:10px;font-weight:600">
+            Reset Password
+          </a>
+        </p>
+        <p>This link expires soon and can only be used once.</p>
+        <p>If the button does not work, open this link:</p>
+        <p><a href="${resetUrl}">${resetUrl}</a></p>
+      </div>
+    `
+  });
+}
+
 async function sendPublishApprovalEmail({ toEmail, toName, examTitle, courseCode, requestedByName, approvalUrl = null }) {
   const transporter = createTransporter();
 
@@ -112,6 +137,7 @@ async function sendPublishApprovalEmail({ toEmail, toName, examTitle, courseCode
 module.exports = {
   isMailConfigured,
   sendVerificationEmail,
+  sendPasswordResetEmail,
   sendResultPublishedEmail,
   sendPublishApprovalEmail
 };
