@@ -949,72 +949,94 @@ code {
   font-size: 0.84rem;
 }
 
-.proctor-event-table {
+.proctor-event-list {
   display: grid;
   gap: 0;
   border: 1px solid rgba(137, 159, 180, 0.14);
   border-radius: 12px;
   overflow: hidden;
-}
-
-.proctor-event-table-head,
-.proctor-event-row {
-  display: grid;
-  grid-template-columns: minmax(150px, 0.85fr) 130px minmax(180px, 1fr) minmax(220px, 1.35fr) minmax(240px, 1fr) 140px;
-}
-
-.proctor-event-table-head {
-  background: rgba(18, 31, 44, 0.96);
-}
-
-.proctor-event-table-head span {
-  padding: 0.65rem 0.75rem;
-  color: #dce7f4;
-  font-size: 0.76rem;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
-.proctor-event-row {
-  border-top: 1px solid rgba(137, 159, 180, 0.12);
   background: rgba(9, 19, 29, 0.88);
 }
 
-.proctor-event-cell {
-  padding: 0.7rem 0.75rem;
+.proctor-event-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.95fr);
+  gap: 1rem;
+  padding: 0.8rem 0.9rem;
+  border-top: 1px solid rgba(137, 159, 180, 0.12);
+}
+
+.proctor-event-row:first-child {
+  border-top: none;
+}
+
+.proctor-event-row-main,
+.proctor-event-row-editor {
   display: grid;
   align-content: start;
-  gap: 0.3rem;
+  gap: 0.5rem;
   min-width: 0;
 }
 
-.proctor-event-cell span,
-.proctor-event-cell small,
-.proctor-event-cell strong {
+.proctor-event-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.proctor-event-heading strong,
+.proctor-event-meta span,
+.proctor-event-row-main p,
+.proctor-event-row-editor span {
   overflow-wrap: anywhere;
 }
 
-.proctor-event-cell small {
+.proctor-event-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.4rem 0.75rem;
   color: #91a7bf;
+  font-size: 0.82rem;
 }
 
-.proctor-event-cell .field {
+.proctor-event-row-editor {
+  grid-template-columns: 110px minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0.65rem;
+}
+
+.proctor-event-row-editor.single-input {
+  grid-template-columns: minmax(120px, 160px) auto;
+}
+
+.proctor-event-row-editor .field {
   gap: 0.3rem;
 }
 
-.proctor-event-cell .field span {
+.proctor-event-row-editor .field span {
   font-size: 0.72rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: #8ea7c1;
 }
 
-.proctor-event-cell .field input {
+.proctor-event-row-editor .field input {
   padding: 0.52rem 0.64rem;
 }
 
 .proctor-event-actions {
+  display: grid;
+  gap: 0.45rem;
   justify-items: stretch;
+}
+
+.proctor-case-table {
+  min-width: 0;
+}
+
+.proctor-case-table td {
+  overflow-wrap: anywhere;
 }
 
 .proctor-decision-form {
@@ -1126,22 +1148,20 @@ code {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .proctor-event-table {
-    gap: 0.75rem;
-    border: none;
-    border-radius: 0;
-    overflow: visible;
-  }
-
-  .proctor-event-table-head {
-    display: none;
-  }
-
   .proctor-event-row {
     grid-template-columns: 1fr;
-    border: 1px solid rgba(137, 159, 180, 0.14);
-    border-radius: 12px;
-    overflow: hidden;
+  }
+
+  .proctor-event-row-editor {
+    grid-template-columns: 110px minmax(0, 1fr);
+  }
+
+  .proctor-event-row-editor.single-input {
+    grid-template-columns: 110px auto;
+  }
+
+  .proctor-event-actions {
+    grid-column: 1 / -1;
   }
 }
 
@@ -1172,6 +1192,17 @@ code {
   .proctor-student-meta,
   .proctor-decision-grid {
     grid-template-columns: 1fr;
+  }
+
+  .proctor-event-heading,
+  .proctor-event-row-editor,
+  .proctor-event-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .proctor-event-heading {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

@@ -2387,10 +2387,20 @@ router.post(
       const draftResults = await client.query(
         `
           SELECT r.id, r.exam_id, r.student_id, r.submission_id, r.total_marks, r.awarded_marks,
-                 r.percentage, r.integrity_score, r.case_status, r.submission_hash_verified,
+                 r.percentage, r.integrity_score,
+                 COALESCE(latest_case.status::text, r.case_status::text) AS case_status,
+                 r.submission_hash_verified,
                  u.email, u.full_name
           FROM result r
           JOIN app_user u ON u.id = r.student_id
+          LEFT JOIN LATERAL (
+            SELECT c.status
+            FROM integrity_case c
+            WHERE c.exam_id = r.exam_id
+              AND c.student_id = r.student_id
+            ORDER BY c.opened_at DESC
+            LIMIT 1
+          ) latest_case ON TRUE
           WHERE r.exam_id = $1 AND r.status = 'draft'
         `,
         [examId]
@@ -2408,12 +2418,13 @@ router.post(
           `
             UPDATE result
                SET status = 'published',
+                   case_status = $3::case_status,
                    published_by = $2,
                    published_at = NOW()
-             WHERE id = $1
-             RETURNING *
+              WHERE id = $1
+              RETURNING *
           `,
-          [draft.id, publishedBy]
+          [draft.id, publishedBy, normalizeResultCaseStatus(draft.case_status)]
         );
         const outcome = buildPublishedResultOutcome(draft, readiness.exam.integrity_threshold);
         const publishedItem = {

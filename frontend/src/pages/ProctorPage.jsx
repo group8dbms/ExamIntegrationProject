@@ -22,6 +22,19 @@ function formatDetails(details) {
   return entries.map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : String(value)}`).join(" | ");
 }
 
+function getEventShortLabel(type) {
+  switch (type) {
+    case "tab_switch":
+      return "Tab switch";
+    case "window_blur":
+      return "Window blur";
+    case "full_exit_screen":
+      return "Exit screen";
+    default:
+      return formatEventLabel(type);
+  }
+}
+
 function getCaseDisplayStatus(student) {
   if (!student?.caseId) return "Not opened";
   if (student.caseClosedAt || ["resolved", "cleared", "confirmed_cheating"].includes(student.caseWorkflowStatus)) {
@@ -61,6 +74,13 @@ function formatCandidateStatus(status) {
 
 function hasPendingReview(student) {
   return !student.caseId || !student.caseDecision || !student.caseClosedAt;
+}
+
+function getDecisionLabel(value) {
+  return String(value || "pending")
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 export default function ProctorPage({ session, onLogout, setMessage }) {
@@ -111,7 +131,7 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
         setDecisionDrafts({});
       }
       if (announce) {
-        setMessage(items.length ? `Loaded ${items.length} exam(s) with pending suspicious activity review.` : "No pending suspicious activity reviews found right now.");
+        setMessage(items.length ? `Loaded ${items.length} exam(s) with suspicious activity review records.` : "No suspicious activity reviews found right now.");
       }
     } catch (error) {
       setMessage(error.message);
@@ -177,57 +197,6 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
     }
   }
 
-  async function assignPenalty(eventId) {
-    const draft = penaltyDrafts[eventId] || { penaltyPoints: "", note: "" };
-    const numericPenalty = Number(draft.penaltyPoints);
-    if (draft.penaltyPoints === "" || Number.isNaN(numericPenalty) || numericPenalty < 0) {
-      setMessage("Enter a valid non-negative penalty before saving.");
-      return;
-    }
-
-    try {
-      await api(`/api/integrity/events/${eventId}/penalty`, {
-        method: "POST",
-        body: JSON.stringify({
-          penaltyPoints: numericPenalty,
-          note: draft.note,
-          assignedBy: session.id,
-          actorRole: "proctor"
-        })
-      });
-      setMessage("Penalty saved for the selected suspicious activity.");
-      await loadExamLogs(selectedExamId, false);
-      await loadLiveExams(false);
-    } catch (error) {
-      setMessage(error.message);
-    }
-  }
-
-  async function openCase(student) {
-    if (!selectedExamId) {
-      setMessage("Choose an exam first.");
-      return;
-    }
-
-    try {
-      const data = await api("/api/integrity/cases/open", {
-        method: "POST",
-        body: JSON.stringify({
-          examId: selectedExamId,
-          studentId: student.studentId,
-          attemptNo: student.attemptNo,
-          openedBy: session.id,
-          actorRole: "proctor",
-          summary: `Case opened by proctor for ${student.studentName} after reviewing suspicious activity logs.`
-        })
-      });
-      setMessage(data.reused ? "Existing open case loaded for this student." : "New integrity case opened for this student.");
-      await loadExamLogs(selectedExamId, false);
-    } catch (error) {
-      setMessage(error.message);
-    }
-  }
-
   function updateDecisionDraft(studentKey, updates) {
     setDecisionDrafts((current) => ({
       ...current,
@@ -238,27 +207,50 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
     }));
   }
 
-  async function saveCaseDecision(event, student) {
+  async function submitCaseReview(event, student) {
     event.preventDefault();
-    if (!student?.caseId) {
-      setMessage("Open a case for this student first.");
-      return;
-    }
-
     try {
-      const draft = decisionDrafts[`${student.studentId}:${student.attemptNo}`] || createDecisionDraft(session?.id, student);
+      const studentKey = `${student.studentId}:${student.attemptNo}`;
+      const draft = decisionDrafts[studentKey] || createDecisionDraft(session?.id, student);
+      if (!String(draft.decisionNotes || "").trim()) {
+        setMessage("Enter the proctor reason before submitting the case.");
+        return;
+      }
+
+      const penalties = (student.events || []).map((item) => {
+        const penaltyDraft = penaltyDrafts[item.eventId] || { penaltyPoints: item.penaltyPoints ?? "" };
+        const rawValue = penaltyDraft.penaltyPoints === "" ? (item.penaltyPoints ?? 0) : penaltyDraft.penaltyPoints;
+        return {
+          eventId: item.eventId,
+          penaltyPoints: Number(rawValue)
+        };
+      });
+
+      if (penalties.some((item) => Number.isNaN(item.penaltyPoints) || item.penaltyPoints < 0)) {
+        setMessage("Penalty points must be valid non-negative numbers before submitting the case.");
+        return;
+      }
+
       const finalStatus = draft.status === "under_review" ? "resolved" : draft.status;
-      const data = await api(`/api/integrity/cases/${student.caseId}/decision`, {
-        method: "PATCH",
-        body: JSON.stringify({ ...draft, status: finalStatus, actorRole: "proctor" })
+      const data = await api("/api/integrity/cases/submit-review", {
+        method: "POST",
+        body: JSON.stringify({
+          examId: selectedExamId,
+          studentId: student.studentId,
+          attemptNo: student.attemptNo,
+          penalties,
+          status: finalStatus,
+          decision: draft.decision,
+          decisionNotes: draft.decisionNotes
+        })
       });
       const storageNote = data.storageConfigured
         ? data.evidenceStored
           ? " Integrity evidence was uploaded automatically."
           : " Integrity evidence could not be uploaded."
         : " Secure storage is not configured, so no integrity evidence file was uploaded.";
-      setMessage(`Proctor decision saved for this case.${storageNote}`);
-      await loadExamLogs(selectedExamId, false);
+      setMessage(`Proctor review submitted for this case.${storageNote}`);
+      await Promise.all([loadExamLogs(selectedExamId, false), loadLiveExams(false)]);
     } catch (error) {
       setMessage(error.message);
     }
@@ -299,11 +291,11 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
                   </div>
                   <span className="status-badge waiting">Logs</span>
                 </div>
-                <p className="info-line">Flagged students: {exam.flagged_student_count} | Suspicious events: {exam.suspicious_event_count}</p>
+                <p className="info-line">Flagged students: {exam.flagged_student_count} | Pending reviews: {exam.pending_review_count} | Suspicious events: {exam.suspicious_event_count}</p>
                 <p className="info-line">Window: {formatDateTime(exam.start_at)} to {formatDateTime(exam.end_at)}</p>
                 <p className="info-line">Last event: {formatDateTime(exam.last_event_at)}</p>
               </button>)}
-              {!liveExams.length && <p>No exams have pending suspicious activity review right now.</p>}
+              {!liveExams.length && <p>No exams have suspicious activity review records right now.</p>}
             </div>
           </div>
 
@@ -315,9 +307,10 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
               </div>
             </div>
             <div className="proctor-student-board">
-              {selectedExamId ? studentCards.filter(hasPendingReview).map((student) => {
+              {selectedExamId ? studentCards.map((student) => {
                 const studentKey = student.key;
                 const decisionDraft = decisionDrafts[studentKey] || createDecisionDraft(session?.id, student);
+                const pendingReview = hasPendingReview(student);
                 return (
                   <article key={studentKey} className="proctor-student-card">
                     <div className="proctor-student-card-header">
@@ -328,11 +321,12 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
                       <div className="proctor-header-badges">
                         <span className="status-badge waiting">Attempt {student.attemptNo}</span>
                         <span className={student.integrityScore > 0 ? "status-badge waiting" : "status-badge muted"}>Penalty total: {student.integrityScore}</span>
+                        <span className={pendingReview ? "status-badge waiting" : "status-badge ready"}>{pendingReview ? "Pending Review" : "Reviewed"}</span>
                       </div>
                     </div>
 
                     <div className="proctor-student-meta">
-                      <span>Status: {formatCandidateStatus(student.status)}</span>
+                      <span>Status: {formatCandidateStatus(student.candidateStatus)}</span>
                       <span>Events: {student.totalEvents}</span>
                       <span>Last seen: {formatDateTime(student.lastEventAt)}</span>
                       <span>Case: {getCaseDisplayStatus(student)}</span>
@@ -340,100 +334,137 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
                       <span>Case ID: {student.caseId || "Not opened"}</span>
                     </div>
 
-                    <div className="form-actions">
-                      <button type="button" className="secondary-button" onClick={() => openCase(student)}>
-                        {student.caseId && !student.caseClosedAt ? "Open Existing Case" : "Open Case"}
-                      </button>
-                    </div>
+                    {pendingReview ? (
+                      <>
+                        <div className="proctor-event-list">
+                          {(student.events || []).map((event) => {
+                            const draft = penaltyDrafts[event.eventId] || { penaltyPoints: event.penaltyPoints ?? "", note: event.penaltyNote || "" };
+                            return (
+                              <div key={event.eventId} className="proctor-event-row">
+                                <div className="proctor-event-row-main">
+                                  <div className="proctor-event-heading">
+                                    <strong>{getEventShortLabel(event.eventType)}</strong>
+                                    <span className="status-badge muted">{formatDateTime(event.eventTime)}</span>
+                                  </div>
+                                  <div className="proctor-event-meta">
+                                    <span>Device: {event.deviceFingerprint || "-"}</span>
+                                    <span>IP: {event.ipAddress || "-"}</span>
+                                    <span>Assigned by: {event.assignedByName || "Not assigned yet"}</span>
+                                  </div>
+                                  <p className="info-line">Details: {formatDetails(event.details)}</p>
+                                </div>
+                                <div className="proctor-event-row-editor single-input">
+                                  <label className="field compact-field">
+                                    <span>Penalty Points</span>
+                                    <input type="number" min="0" step="0.5" value={draft.penaltyPoints} onChange={(e) => setPenaltyDrafts({ ...penaltyDrafts, [event.eventId]: { ...draft, penaltyPoints: e.target.value } })} placeholder="0" />
+                                  </label>
+                                  <span className={event.penaltyPoints !== null ? "status-badge ready" : "status-badge muted"}>
+                                    {event.penaltyPoints !== null ? `Current: ${event.penaltyPoints}` : "Current: 0"}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
 
-                    <div className="proctor-event-table">
-                      <div className="proctor-event-table-head">
-                        <span>Event</span>
-                        <span>Time</span>
-                        <span>Device / IP</span>
-                        <span>Details</span>
-                        <span>Penalty</span>
-                        <span>Actions</span>
-                      </div>
-                      {(student.events || []).map((event) => {
-                        const draft = penaltyDrafts[event.eventId] || { penaltyPoints: "", note: "" };
-                        return (
-                          <div key={event.eventId} className="proctor-event-row">
-                            <div className="proctor-event-cell">
-                              <strong>{formatEventLabel(event.eventType)}</strong>
-                              <small>Assigned by: {event.assignedByName || "Not assigned yet"}</small>
-                            </div>
-                            <div className="proctor-event-cell">
-                              <span>{formatDateTime(event.eventTime)}</span>
-                            </div>
-                            <div className="proctor-event-cell">
-                              <span>Device: {event.deviceFingerprint || "-"}</span>
-                              <small>IP: {event.ipAddress || "-"}</small>
-                            </div>
-                            <div className="proctor-event-cell">
-                              <span>{formatDetails(event.details)}</span>
-                            </div>
-                            <div className="proctor-event-cell">
-                              <label className="field compact-field">
-                                <span>Points</span>
-                                <input type="number" min="0" step="0.5" value={draft.penaltyPoints} onChange={(e) => setPenaltyDrafts({ ...penaltyDrafts, [event.eventId]: { ...draft, penaltyPoints: e.target.value } })} placeholder="0" />
-                              </label>
-                              <label className="field compact-field">
-                                <span>Note</span>
-                                <input value={draft.note} onChange={(e) => setPenaltyDrafts({ ...penaltyDrafts, [event.eventId]: { ...draft, note: e.target.value } })} placeholder="Penalty note" />
-                              </label>
-                            </div>
-                            <div className="proctor-event-cell proctor-event-actions">
-                              <span className={event.penaltyPoints !== null ? "status-badge ready" : "status-badge muted"}>
-                                {event.penaltyPoints !== null ? `Saved: ${event.penaltyPoints}` : "Not saved"}
-                              </span>
-                              <button type="button" className="primary-button" onClick={() => assignPenalty(event.eventId)}>Save</button>
+                        <form className="proctor-decision-form" onSubmit={(event) => submitCaseReview(event, student)}>
+                          <div className="task-card-header">
+                            <div>
+                              <h3>Submit Proctor Review</h3>
+                              <p className="info-line">Assign all penalty points, write the reason once, and submit the full case review in one action.</p>
                             </div>
                           </div>
-                        );
-                      })}
-                    </div>
-
-                    <form className="proctor-decision-form" onSubmit={(event) => saveCaseDecision(event, student)}>
-                      <div className="task-card-header">
-                        <div>
-                          <h3>Proctor Decision</h3>
-                          <p className="info-line">Save the review outcome here so publishing is not blocked for this student.</p>
+                          <div className="panel-grid proctor-decision-grid">
+                            <label className="field">
+                              <span>Status</span>
+                              <select value={decisionDraft.status} onChange={(e) => updateDecisionDraft(studentKey, { status: e.target.value })}>
+                                <option value="under_review">Under Review</option>
+                                <option value="cleared">Cleared</option>
+                                <option value="confirmed_cheating">Confirmed Cheating</option>
+                                <option value="resolved">Resolved</option>
+                              </select>
+                            </label>
+                            <label className="field">
+                              <span>Decision</span>
+                              <select value={decisionDraft.decision} onChange={(e) => updateDecisionDraft(studentKey, { decision: e.target.value })}>
+                                <option value="manual_review">Manual Review</option>
+                                <option value="warning">Warning</option>
+                                <option value="no_issue">No Issue</option>
+                                <option value="invalidate_exam">Invalidate Exam</option>
+                              </select>
+                            </label>
+                            <label className="field wide">
+                              <span>Reason</span>
+                              <textarea rows="4" value={decisionDraft.decisionNotes} onChange={(e) => updateDecisionDraft(studentKey, { decisionNotes: e.target.value })} placeholder="Write the full reason for this case decision" />
+                            </label>
+                          </div>
+                          <div className="form-actions">
+                            <button className="primary-button" type="submit">Submit Full Case Review</button>
+                          </div>
+                        </form>
+                      </>
+                    ) : (
+                      <>
+                        <div className="task-card-header">
+                          <div>
+                            <h3>Submitted Review</h3>
+                            <p className="info-line">This case is already closed and is shown below in read-only audit style.</p>
+                          </div>
                         </div>
-                      </div>
-                      <p className="info-line">Opened at: {formatDateTime(student.caseOpenedAt)} | Closed at: {formatDateTime(student.caseClosedAt)} | Display status: {getCaseDisplayStatus(student)}</p>
-                      <div className="panel-grid proctor-decision-grid">
-                        <label className="field">
-                          <span>Status</span>
-                          <select value={decisionDraft.status} onChange={(e) => updateDecisionDraft(studentKey, { status: e.target.value })}>
-                            <option value="under_review">Under Review</option>
-                            <option value="cleared">Cleared</option>
-                            <option value="confirmed_cheating">Confirmed Cheating</option>
-                            <option value="resolved">Resolved</option>
-                          </select>
-                        </label>
-                        <label className="field">
-                          <span>Decision</span>
-                          <select value={decisionDraft.decision} onChange={(e) => updateDecisionDraft(studentKey, { decision: e.target.value })}>
-                            <option value="manual_review">Manual Review</option>
-                            <option value="warning">Warning</option>
-                            <option value="no_issue">No Issue</option>
-                            <option value="invalidate_exam">Invalidate Exam</option>
-                          </select>
-                        </label>
-                        <label className="field wide">
-                          <span>Decision Notes</span>
-                          <textarea rows="4" value={decisionDraft.decisionNotes} onChange={(e) => updateDecisionDraft(studentKey, { decisionNotes: e.target.value })} placeholder="Summarize the proctor decision for this case" />
-                        </label>
-                      </div>
-                      <div className="form-actions">
-                        <button className="primary-button" type="submit" disabled={!student.caseId}>Save Proctor Decision</button>
-                      </div>
-                    </form>
+                        <div className="audit-table-wrap">
+                          <table className="audit-table proctor-case-table">
+                            <thead>
+                              <tr>
+                                <th>Event</th>
+                                <th>Time</th>
+                                <th>Penalty</th>
+                                <th>Device</th>
+                                <th>IP</th>
+                                <th>Details</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(student.events || []).map((event) => (
+                                <tr key={event.eventId}>
+                                  <td>{getEventShortLabel(event.eventType)}</td>
+                                  <td>{formatDateTime(event.eventTime)}</td>
+                                  <td>{event.penaltyPoints ?? 0}</td>
+                                  <td>{event.deviceFingerprint || "-"}</td>
+                                  <td>{event.ipAddress || "-"}</td>
+                                  <td>{formatDetails(event.details)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="audit-table-wrap">
+                          <table className="audit-table proctor-case-table">
+                            <thead>
+                              <tr>
+                                <th>Case Status</th>
+                                <th>Decision</th>
+                                <th>Reason</th>
+                                <th>Opened</th>
+                                <th>Closed</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              <tr>
+                                <td>{getCaseDisplayStatus(student)}</td>
+                                <td>{getDecisionLabel(student.caseDecision)}</td>
+                                <td>{student.caseDecisionNotes || "-"}</td>
+                                <td>{formatDateTime(student.caseOpenedAt)}</td>
+                                <td>{formatDateTime(student.caseClosedAt)}</td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                      </>
+                    )}
                   </article>
                 );
               }) : <p>Select an exam to review pending student cases.</p>}
-              {selectedExamId && !studentCards.filter(hasPendingReview).length && <p>All flagged students for this exam already have completed proctor decisions.</p>}
+              {selectedExamId && !studentCards.length && <p>No suspicious logs recorded for this exam yet.</p>}
             </div>
           </div>
         </div>

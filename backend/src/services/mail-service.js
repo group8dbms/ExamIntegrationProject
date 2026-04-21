@@ -50,6 +50,7 @@ async function sendResultPublishedEmail({ toEmail, toName, examTitle, courseCode
   const normalizedOutcome = String(resultOutcome || (thresholdBreached ? "Failed due to integrity threshold breach" : "Published"));
   const failedOutcome = normalizedOutcome.toLowerCase().includes("failed") || normalizedOutcome.toLowerCase().includes("disqualified");
   const displayCaseStatus = caseStatus || "clear";
+  const cheatingConfirmed = String(displayCaseStatus).toLowerCase() === "confirmed_cheating" || normalizedOutcome.toLowerCase().includes("confirmed cheating");
 
   await transporter.sendMail({
     from: env.smtpFrom,
@@ -65,7 +66,11 @@ async function sendResultPublishedEmail({ toEmail, toName, examTitle, courseCode
             Final outcome: ${normalizedOutcome}
           </div>
         ` : ""}
-        ${thresholdBreached ? `
+        ${cheatingConfirmed ? `
+          <div style="margin:16px 0;padding:14px 16px;border-radius:14px;background:#fff0f0;border:1px solid #f2b4b4;color:#7b1f1f;font-weight:600">
+            The proctor confirmed cheating for this attempt. This exam has been recorded as disqualified.
+          </div>
+        ` : thresholdBreached ? `
           <div style="margin:16px 0;padding:14px 16px;border-radius:14px;background:#fff0f0;border:1px solid #f2b4b4;color:#7b1f1f;font-weight:600">
             An integrity case was opened due to suspicious activity, and your final penalty total crossed the exam threshold${integrityThreshold !== null ? ` (${integrityThreshold})` : ""}. This attempt has been marked as failed on integrity grounds.
           </div>

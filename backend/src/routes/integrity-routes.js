@@ -19,24 +19,30 @@ router.get(
   asyncHandler(async (req, res) => {
     const result = await pool.query(
       `
-        WITH pending_candidates AS (
+        WITH latest_case_per_attempt AS (
+          SELECT DISTINCT ON (c.exam_id, c.student_id, c.attempt_no)
+            c.exam_id,
+            c.student_id,
+            c.attempt_no,
+            c.id,
+            c.decision,
+            c.closed_at
+          FROM integrity_case c
+          ORDER BY c.exam_id, c.student_id, c.attempt_no, c.opened_at DESC
+        ),
+        suspicious_attempts AS (
           SELECT DISTINCT
             ie.exam_id,
             ie.student_id,
-            ie.attempt_no
+            ie.attempt_no,
+            latest_case.id AS case_id,
+            latest_case.decision,
+            latest_case.closed_at
           FROM integrity_event ie
-          LEFT JOIN LATERAL (
-            SELECT c.id, c.decision, c.closed_at
-            FROM integrity_case c
-            WHERE c.exam_id = ie.exam_id
-              AND c.student_id = ie.student_id
-              AND c.attempt_no = ie.attempt_no
-            ORDER BY c.opened_at DESC
-            LIMIT 1
-          ) latest_case ON TRUE
-          WHERE latest_case.id IS NULL
-             OR latest_case.decision IS NULL
-             OR latest_case.closed_at IS NULL
+          LEFT JOIN latest_case_per_attempt latest_case
+            ON latest_case.exam_id = ie.exam_id
+           AND latest_case.student_id = ie.student_id
+           AND latest_case.attempt_no = ie.attempt_no
         )
         SELECT
           e.id,
@@ -45,16 +51,21 @@ router.get(
           e.start_at,
           e.end_at,
           COUNT(DISTINCT ie.id) AS suspicious_event_count,
-          COUNT(DISTINCT (pc.student_id, pc.attempt_no)) AS flagged_student_count,
+          COUNT(DISTINCT (sa.student_id, sa.attempt_no)) AS flagged_student_count,
+          COUNT(DISTINCT CASE
+            WHEN sa.case_id IS NULL OR sa.decision IS NULL OR sa.closed_at IS NULL
+            THEN (sa.student_id, sa.attempt_no)
+            ELSE NULL
+          END) AS pending_review_count,
           MAX(ie.event_time) AS last_event_at
         FROM exam e
-        JOIN pending_candidates pc ON pc.exam_id = e.id
+        JOIN suspicious_attempts sa ON sa.exam_id = e.id
         JOIN integrity_event ie
-          ON ie.exam_id = pc.exam_id
-         AND ie.student_id = pc.student_id
-         AND ie.attempt_no = pc.attempt_no
+          ON ie.exam_id = sa.exam_id
+         AND ie.student_id = sa.student_id
+         AND ie.attempt_no = sa.attempt_no
         GROUP BY e.id, e.title, e.course_code, e.start_at, e.end_at
-        ORDER BY last_event_at DESC NULLS LAST, e.start_at DESC
+        ORDER BY pending_review_count DESC, last_event_at DESC NULLS LAST, e.start_at DESC
       `
     );
 
@@ -680,6 +691,297 @@ router.patch(
       await client.query("COMMIT");
       res.json({
         ...updatedCase,
+        storageConfigured: isStorageConfigured(),
+        evidenceStored: Boolean(storedDocument?.stored),
+        evidenceDocumentId: storedDocument?.item?.id || null
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  })
+);
+
+router.post(
+  "/cases/submit-review",
+  requireAuth,
+  requireRole("proctor"),
+  asyncHandler(async (req, res) => {
+    const {
+      examId,
+      studentId,
+      attemptNo = 1,
+      penalties = [],
+      status,
+      decision,
+      decisionNotes = null
+    } = req.body;
+    const actionBy = req.user.id;
+    const actorRole = req.user.role;
+
+    if (!examId || !studentId) {
+      return res.status(400).json({ message: "examId and studentId are required." });
+    }
+
+    if (!status || !decision) {
+      return res.status(400).json({ message: "status and decision are required." });
+    }
+
+    if (!String(decisionNotes || "").trim()) {
+      return res.status(400).json({ message: "A case reason is required before submitting the review." });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const candidateResult = await client.query(
+        `
+          SELECT ec.exam_id, ec.student_id, ec.attempt_no, ec.suspicion_score, COALESCE(e.integrity_threshold, 0) AS integrity_threshold
+          FROM exam_candidate ec
+          JOIN exam e ON e.id = ec.exam_id
+          WHERE ec.exam_id = $1 AND ec.student_id = $2 AND ec.attempt_no = $3
+          FOR UPDATE
+        `,
+        [examId, studentId, attemptNo]
+      );
+
+      if (!candidateResult.rows.length) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ message: "Exam attempt not found." });
+      }
+
+      const candidate = candidateResult.rows[0];
+
+      const eventRows = await client.query(
+        `
+          SELECT ie.id, ie.event_type, ipa.penalty_points, ipa.note
+          FROM integrity_event ie
+          LEFT JOIN integrity_penalty_assignment ipa ON ipa.event_id = ie.id
+          WHERE ie.exam_id = $1 AND ie.student_id = $2 AND ie.attempt_no = $3
+          ORDER BY ie.event_time ASC
+        `,
+        [examId, studentId, attemptNo]
+      );
+
+      const eventMap = new Map(eventRows.rows.map((row) => [String(row.id), row]));
+      let totalDelta = 0;
+
+      for (const item of penalties) {
+        const eventId = String(item?.eventId || "");
+        const numericPenalty = Number(item?.penaltyPoints);
+        if (!eventMap.has(eventId)) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ message: "One or more penalty rows no longer belong to this student attempt." });
+        }
+        if (Number.isNaN(numericPenalty) || numericPenalty < 0) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ message: "Penalty points must be valid non-negative numbers." });
+        }
+
+        const currentEvent = eventMap.get(eventId);
+        const previousPenalty = Number(currentEvent.penalty_points || 0);
+        const delta = numericPenalty - previousPenalty;
+        totalDelta += delta;
+
+        await client.query(
+          `
+            INSERT INTO integrity_penalty_assignment (
+              event_id, exam_id, student_id, attempt_no, penalty_points, note, assigned_by, assigned_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+            ON CONFLICT (event_id)
+            DO UPDATE SET
+              penalty_points = EXCLUDED.penalty_points,
+              note = EXCLUDED.note,
+              assigned_by = EXCLUDED.assigned_by,
+              assigned_at = NOW(),
+              updated_at = NOW()
+          `,
+          [eventId, examId, studentId, attemptNo, numericPenalty, currentEvent.note || "", actionBy]
+        );
+
+        await writeAuditLog(client, {
+          actorUserId: actionBy,
+          actorRole,
+          action: "integrity_penalty_assigned",
+          entityType: "integrity_event",
+          entityId: null,
+          ipAddress: req.ip,
+          details: {
+            eventId,
+            examId,
+            studentId,
+            attemptNo,
+            eventType: currentEvent.event_type,
+            previousPenalty,
+            penaltyPoints: numericPenalty,
+            delta
+          }
+        });
+      }
+
+      await client.query(
+        `
+          UPDATE exam_candidate
+             SET suspicion_score = GREATEST(0, COALESCE(suspicion_score, 0) + $4)
+           WHERE exam_id = $1 AND student_id = $2 AND attempt_no = $3
+        `,
+        [examId, studentId, attemptNo, totalDelta]
+      );
+
+      const latestCaseResult = await client.query(
+        `
+          SELECT *
+          FROM integrity_case
+          WHERE exam_id = $1 AND student_id = $2 AND attempt_no = $3
+          ORDER BY opened_at DESC
+          LIMIT 1
+        `,
+        [examId, studentId, attemptNo]
+      );
+
+      let caseRecord = latestCaseResult.rows[0] || null;
+
+      if (caseRecord && caseRecord.decision !== null) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ message: "This case review has already been completed." });
+      }
+
+      if (!caseRecord) {
+        const createdCase = await client.query(
+          `
+            INSERT INTO integrity_case (
+              exam_id, student_id, attempt_no, opened_by, status, current_score, threshold_at_open, summary
+            ) VALUES ($1, $2, $3, $4, 'open', $5, $6, $7)
+            RETURNING *
+          `,
+          [
+            examId,
+            studentId,
+            attemptNo,
+            actionBy,
+            Number(candidate.suspicion_score || 0) + totalDelta,
+            Number(candidate.integrity_threshold || 0),
+            "Case opened and reviewed by proctor from the suspicious activity queue."
+          ]
+        );
+        caseRecord = createdCase.rows[0];
+
+        await client.query(
+          `
+            INSERT INTO case_action (case_id, action_type, note, action_by)
+            VALUES ($1, 'case_opened', $2, $3)
+          `,
+          [caseRecord.id, "Case opened and reviewed by proctor from the suspicious activity queue.", actionBy]
+        );
+
+        await writeAuditLog(client, {
+          actorUserId: actionBy,
+          actorRole,
+          action: "integrity_case_opened",
+          entityType: "integrity_case",
+          entityId: caseRecord.id,
+          ipAddress: req.ip,
+          details: { examId, studentId, attemptNo }
+        });
+      }
+
+      const caseResult = await client.query(
+        `
+          UPDATE integrity_case
+             SET status = $1::case_status,
+                 decision = $2,
+                 decision_notes = $3,
+                 resolved_by = $4,
+                 current_score = (
+                   SELECT COALESCE(suspicion_score, 0)
+                   FROM exam_candidate
+                   WHERE exam_id = $5 AND student_id = $6 AND attempt_no = $7
+                 ),
+                 closed_at = CASE WHEN $1::case_status IN ('cleared', 'confirmed_cheating', 'resolved') THEN NOW() ELSE closed_at END
+           WHERE id = $8
+           RETURNING *
+        `,
+        [status, decision, decisionNotes, actionBy, examId, studentId, attemptNo, caseRecord.id]
+      );
+
+      const updatedCase = caseResult.rows[0];
+
+      const contextResult = await client.query(
+        `
+          SELECT
+            e.id AS exam_id,
+            e.title AS exam_title,
+            e.course_code,
+            u.id AS student_id,
+            u.full_name AS student_name,
+            u.email AS student_email
+          FROM exam e
+          JOIN app_user u ON u.id = $2
+          WHERE e.id = $1
+        `,
+        [examId, studentId]
+      );
+
+      const reviewedEvents = await client.query(
+        `
+          SELECT
+            ie.event_type,
+            ie.event_time,
+            ie.ip_address,
+            ie.device_fingerprint,
+            ie.details,
+            ipa.penalty_points,
+            ipa.note AS penalty_note
+          FROM integrity_event ie
+          LEFT JOIN integrity_penalty_assignment ipa ON ipa.event_id = ie.id
+          WHERE ie.exam_id = $1 AND ie.student_id = $2 AND ie.attempt_no = $3
+          ORDER BY ie.event_time ASC
+        `,
+        [examId, studentId, attemptNo]
+      );
+
+      await client.query(
+        `INSERT INTO case_action (case_id, action_type, note, action_by) VALUES ($1, 'decision', $2, $3)`,
+        [updatedCase.id, decisionNotes, actionBy]
+      );
+
+      await writeAuditLog(client, {
+        actorUserId: actionBy,
+        actorRole,
+        action: "integrity_case_decided",
+        entityType: "integrity_case",
+        entityId: updatedCase.id,
+        ipAddress: req.ip,
+        details: { examId, studentId, attemptNo, status, decision }
+      });
+
+      let storedDocument = null;
+      if (contextResult.rows.length) {
+        storedDocument = await createIntegrityEvidenceDocument(client, {
+          caseRecord: updatedCase,
+          exam: {
+            id: contextResult.rows[0].exam_id,
+            title: contextResult.rows[0].exam_title,
+            course_code: contextResult.rows[0].course_code
+          },
+          student: {
+            id: contextResult.rows[0].student_id,
+            fullName: contextResult.rows[0].student_name,
+            email: contextResult.rows[0].student_email
+          },
+          events: reviewedEvents.rows,
+          uploadedBy: actionBy,
+          actorRole,
+          ipAddress: req.ip
+        });
+      }
+
+      await client.query("COMMIT");
+      res.json({
+        case: updatedCase,
         storageConfigured: isStorageConfigured(),
         evidenceStored: Boolean(storedDocument?.stored),
         evidenceDocumentId: storedDocument?.item?.id || null
