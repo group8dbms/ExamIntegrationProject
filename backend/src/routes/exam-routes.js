@@ -632,9 +632,9 @@ async function ensureAbsentCandidatesEvaluated(client, { examId }) {
 
   const questions = await client.query(
     `
-      SELECT COALESCE(eq.marks_override, q.default_marks) AS marks
+      SELECT COALESCE(eq.marks_override, eq.default_marks_snapshot, q.default_marks) AS marks
       FROM exam_question eq
-      JOIN question q ON q.id = eq.question_id
+      LEFT JOIN question q ON q.id = eq.question_id
       WHERE eq.exam_id = $1
     `,
     [examId]
@@ -800,9 +800,13 @@ async function buildEvaluatedResults(client, { examId, actorId, actorRole, ipAdd
 
   const questions = await client.query(
     `
-      SELECT q.id, q.question_type, q.correct_answer, COALESCE(eq.marks_override, q.default_marks) AS marks
+      SELECT
+        eq.question_id AS id,
+        COALESCE(eq.question_type_snapshot, q.question_type) AS question_type,
+        COALESCE(eq.correct_answer_snapshot, q.correct_answer) AS correct_answer,
+        COALESCE(eq.marks_override, eq.default_marks_snapshot, q.default_marks) AS marks
         FROM exam_question eq
-        JOIN question q ON q.id = eq.question_id
+        LEFT JOIN question q ON q.id = eq.question_id
        WHERE eq.exam_id = $1
     `,
     [examId]
@@ -1143,9 +1147,15 @@ router.get(
 
       const questionResult = await client.query(
         `
-          SELECT q.id, q.question_type, q.prompt, q.options, COALESCE(eq.marks_override, q.default_marks) AS marks, eq.sequence_no
+          SELECT
+            eq.question_id AS id,
+            COALESCE(eq.question_type_snapshot, q.question_type) AS question_type,
+            COALESCE(eq.prompt_snapshot, q.prompt) AS prompt,
+            COALESCE(eq.options_snapshot, q.options, '[]'::jsonb) AS options,
+            COALESCE(eq.marks_override, eq.default_marks_snapshot, q.default_marks) AS marks,
+            eq.sequence_no
             FROM exam_question eq
-            JOIN question q ON q.id = eq.question_id
+            LEFT JOIN question q ON q.id = eq.question_id
            WHERE eq.exam_id = $1
            ORDER BY eq.sequence_no ASC
         `,
@@ -1362,9 +1372,29 @@ router.post(
           );
 
           await client.query(
-            `INSERT INTO exam_question (exam_id, question_id, sequence_no, marks_override) VALUES ($1, $2, $3, $4)`,
-            [exam.id, questionResult.rows[0].id, index + 1, Number(item.marks || 1)]
-          );
+              `
+                INSERT INTO exam_question (
+                  exam_id, question_id, sequence_no, marks_override,
+                  question_type_snapshot, prompt_snapshot, options_snapshot,
+                  correct_answer_snapshot, default_marks_snapshot, metadata_snapshot
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10::jsonb)
+              `,
+              [
+                exam.id,
+                questionResult.rows[0].id,
+                index + 1,
+                Number(item.marks || 1),
+                item.questionType,
+                item.prompt,
+                JSON.stringify(item.options || []),
+                JSON.stringify(item.correctAnswer),
+                Number(item.marks || 1),
+                JSON.stringify({
+                  authoredIn: item.sourceQuestionId ? "question_bank_reused" : "admin_ui",
+                  courseCode: item.courseCodeTag || courseCode
+                })
+              ]
+            );
         }
       }
 
@@ -1541,9 +1571,16 @@ router.get(
 
     const questions = await pool.query(
       `
-        SELECT q.id, q.question_type, q.prompt, q.options, q.correct_answer, COALESCE(eq.marks_override, q.default_marks) AS marks, eq.sequence_no
+        SELECT
+          eq.question_id AS id,
+          COALESCE(eq.question_type_snapshot, q.question_type) AS question_type,
+          COALESCE(eq.prompt_snapshot, q.prompt) AS prompt,
+          COALESCE(eq.options_snapshot, q.options, '[]'::jsonb) AS options,
+          COALESCE(eq.correct_answer_snapshot, q.correct_answer) AS correct_answer,
+          COALESCE(eq.marks_override, eq.default_marks_snapshot, q.default_marks) AS marks,
+          eq.sequence_no
         FROM exam_question eq
-        JOIN question q ON q.id = eq.question_id
+        LEFT JOIN question q ON q.id = eq.question_id
         WHERE eq.exam_id = $1
         ORDER BY eq.sequence_no ASC
       `,
@@ -1674,13 +1711,13 @@ router.post(
       const marksMeta = await client.query(
         `
           SELECT
-            q.id,
-            q.question_type,
-            q.correct_answer,
-            COALESCE(eq.marks_override, q.default_marks) AS marks,
+            eq.question_id AS id,
+            COALESCE(eq.question_type_snapshot, q.question_type) AS question_type,
+            COALESCE(eq.correct_answer_snapshot, q.correct_answer) AS correct_answer,
+            COALESCE(eq.marks_override, eq.default_marks_snapshot, q.default_marks) AS marks,
             s.final_answers
           FROM exam_question eq
-          JOIN question q ON q.id = eq.question_id
+          LEFT JOIN question q ON q.id = eq.question_id
           JOIN answer_submission s ON s.id = $2
           WHERE eq.exam_id = $1
         `,

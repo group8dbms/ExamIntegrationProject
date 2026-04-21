@@ -35,9 +35,9 @@ async function loadAttemptContext(client, examId, studentId, attemptNo) {
 async function computeExamTotalMarks(client, examId) {
   const result = await client.query(
     `
-      SELECT COALESCE(SUM(COALESCE(eq.marks_override, q.default_marks)), 0) AS total_marks
+      SELECT COALESCE(SUM(COALESCE(eq.marks_override, eq.default_marks_snapshot, q.default_marks)), 0) AS total_marks
       FROM exam_question eq
-      JOIN question q ON q.id = eq.question_id
+      LEFT JOIN question q ON q.id = eq.question_id
       WHERE eq.exam_id = $1
     `,
     [examId]

@@ -112,9 +112,15 @@ CREATE TABLE IF NOT EXISTS question (
 
 CREATE TABLE IF NOT EXISTS exam_question (
     exam_id UUID NOT NULL REFERENCES exam(id) ON DELETE CASCADE,
-    question_id UUID NOT NULL REFERENCES question(id),
+    question_id UUID NOT NULL,
     sequence_no INTEGER NOT NULL,
     marks_override NUMERIC(8,2),
+    question_type_snapshot TEXT,
+    prompt_snapshot TEXT,
+    options_snapshot JSONB NOT NULL DEFAULT '[]'::JSONB,
+    correct_answer_snapshot JSONB,
+    default_marks_snapshot NUMERIC(8,2),
+    metadata_snapshot JSONB NOT NULL DEFAULT '{}'::JSONB,
     is_required BOOLEAN NOT NULL DEFAULT TRUE,
     PRIMARY KEY (exam_id, question_id),
     UNIQUE (exam_id, sequence_no)
