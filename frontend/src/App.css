@@ -1404,6 +1404,42 @@ code {
   color: #ffe6c9;
 }
 
+.proctor-evidence-panel {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.proctor-evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
+
+.proctor-evidence-card {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.65rem;
+  border-radius: 18px;
+  border: 1px solid rgba(116, 174, 222, 0.18);
+  background: rgba(9, 17, 27, 0.74);
+  text-decoration: none;
+  color: inherit;
+}
+
+.proctor-evidence-card img {
+  width: 100%;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 12px;
+  border: 1px solid rgba(126, 174, 214, 0.16);
+}
+
+.proctor-evidence-card span {
+  font-size: 0.82rem;
+  color: #bfd5eb;
+}
+
 @media (max-width: 980px) {
   .student-exam-meta,
   .student-result-meta,
