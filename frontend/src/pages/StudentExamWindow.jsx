@@ -85,6 +85,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   const sessionTokenRef = useRef("");
   const webcamVideoRef = useRef(null);
   const webcamStreamRef = useRef(null);
+  const webcamStatusRef = useRef("checking");
   const webcamHealthRef = useRef(null);
   const webcamBlockReasonRef = useRef("");
   const webcamEvidenceIntervalRef = useRef(null);
@@ -92,6 +93,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   const webcamEvidenceUploadingRef = useRef(false);
   const screenShareVideoRef = useRef(null);
   const screenShareStreamRef = useRef(null);
+  const screenShareStatusRef = useRef("checking");
   const screenShareHealthRef = useRef(null);
   const screenShareBlockReasonRef = useRef("");
   const screenEvidenceIntervalRef = useRef(null);
@@ -122,6 +124,14 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   useEffect(() => {
     answersRef.current = answers;
   }, [answers]);
+
+  useEffect(() => {
+    webcamStatusRef.current = webcamStatus;
+  }, [webcamStatus]);
+
+  useEffect(() => {
+    screenShareStatusRef.current = screenShareStatus;
+  }, [screenShareStatus]);
 
   function cleanupRuntime() {
     if (autosaveRef.current) window.clearInterval(autosaveRef.current);
@@ -172,7 +182,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     if (!activeExamPaper || !token || !webcamEvidenceEnabledRef.current || webcamEvidenceUploadingRef.current) {
       return;
     }
-    if (!video || webcamStatus !== "active" || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+    if (!video || webcamStatusRef.current !== "active" || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
       return;
     }
 
@@ -348,7 +358,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     if (!activeExamPaper || !token || !screenEvidenceEnabledRef.current || screenEvidenceUploadingRef.current) {
       return;
     }
-    if (!video || screenShareStatus !== "active" || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+    if (!video || screenShareStatusRef.current !== "active" || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
       return;
     }
 
