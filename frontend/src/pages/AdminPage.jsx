@@ -545,6 +545,10 @@ export default function AdminPage({ session, onLogout, setMessage }) {
 
   const activeExam = useMemo(() => activeExams.find((item) => item.id === activeExamId) || null, [activeExamId, activeExams]);
   const selectedPublishExam = useMemo(() => exams.find((item) => item.id === publishExamId) || null, [exams, publishExamId]);
+  const publishApprovalLocked = useMemo(
+    () => ["pending", "approved", "published"].includes(String(publishApproval?.approval?.status || "").toLowerCase()),
+    [publishApproval]
+  );
 
   async function handleFacultyAssign(event) {
     event.preventDefault();
@@ -1348,8 +1352,8 @@ export default function AdminPage({ session, onLogout, setMessage }) {
           <form className="task-card single-column" onSubmit={handlePublish}>
             <Field label="Selected Exam ID"><input required value={publishExamId} onChange={(event) => setPublishExamId(event.target.value)} placeholder="Choose from the exam lists below" /></Field>
             <div className="form-actions">
-              <button type="button" className="primary-button" onClick={handleRequestPublishApproval} disabled={!publishExamId.trim() || publishApprovalLoading || selectedPublishExam?.publish_state !== "ready_to_publish"}>
-                Request Approval
+              <button type="button" className="primary-button" onClick={handleRequestPublishApproval} disabled={!publishExamId.trim() || publishApprovalLoading || selectedPublishExam?.publish_state !== "ready_to_publish" || publishApprovalLocked}>
+                {publishApproval?.approval?.status === "approved" ? "Approval Completed" : publishApproval?.approval?.status === "pending" ? "Approval Requested" : "Request Approval"}
               </button>
               <button type="button" className="secondary-button" onClick={handleApprovePublishRequest} disabled={!publishApproval?.canApprove || publishApprovalLoading}>
                 Approve Request

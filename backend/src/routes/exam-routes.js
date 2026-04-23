@@ -1708,6 +1708,20 @@ router.post(
         return res.status(404).json({ message: "Submitted answer script not found for this exam." });
       }
 
+      const existingEvaluation = await client.query(
+        `
+          SELECT id
+          FROM evaluation
+          WHERE submission_id = $1
+        `,
+        [submissionId]
+      );
+
+      if (existingEvaluation.rows.length) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ message: "Marks for this submission have already been saved and are now locked." });
+      }
+
       const marksMeta = await client.query(
         `
           SELECT
