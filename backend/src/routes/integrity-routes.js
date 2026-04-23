@@ -12,6 +12,31 @@ function mapCaseStatus(value) {
   return value || "not_opened";
 }
 
+function getDefaultIntegrityWeight(eventType) {
+  switch (String(eventType || "")) {
+    case "tab_switch":
+      return 2;
+    case "copy_attempt":
+      return 2.5;
+    case "paste_attempt":
+      return 2;
+    case "multiple_login":
+      return 4;
+    case "ip_change":
+      return 5;
+    case "device_change":
+      return 4;
+    case "fullscreen_exit":
+      return 1.5;
+    case "network_change":
+      return 3;
+    case "webcam_block":
+      return 4.5;
+    default:
+      return 1;
+  }
+}
+
 router.get(
   "/live-exams",
   requireAuth,
@@ -261,6 +286,9 @@ router.post(
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      const appliedWeight = weight === null || weight === undefined
+        ? getDefaultIntegrityWeight(eventType)
+        : Number(weight);
       const eventResult = await client.query(
         `
           INSERT INTO integrity_event (
@@ -269,8 +297,103 @@ router.post(
           ) VALUES ($1, $2, $3, $4, $5, $6, $7::inet, $8, $9::jsonb, $10)
           RETURNING *
         `,
-        [examId, studentId, attemptNo, sessionId, eventType, weight, ipAddress, deviceFingerprint, JSON.stringify(details), createdBy]
+        [examId, studentId, attemptNo, sessionId, eventType, appliedWeight, ipAddress, deviceFingerprint, JSON.stringify(details), createdBy]
       );
+
+      const scoreResult = await client.query(
+        `
+          UPDATE exam_candidate ec
+             SET suspicion_score = COALESCE(ec.suspicion_score, 0) + $4,
+                 last_ip = COALESCE($5::inet, ec.last_ip),
+                 last_device = COALESCE($6, ec.last_device)
+           WHERE ec.exam_id = $1
+             AND ec.student_id = $2
+             AND ec.attempt_no = $3
+         RETURNING ec.exam_id, ec.student_id, ec.attempt_no, ec.suspicion_score
+        `,
+        [examId, studentId, attemptNo, appliedWeight, ipAddress, deviceFingerprint]
+      );
+
+      if (!scoreResult.rows.length) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ message: "Exam attempt not found." });
+      }
+
+      const candidateState = scoreResult.rows[0];
+      const thresholdResult = await client.query(
+        `
+          SELECT integrity_threshold
+          FROM exam
+          WHERE id = $1
+        `,
+        [examId]
+      );
+      const currentScore = Number(candidateState.suspicion_score || 0);
+      const threshold = Number(thresholdResult.rows[0]?.integrity_threshold || 0);
+
+      if (threshold > 0 && currentScore >= threshold) {
+        const existingCase = await client.query(
+          `
+            SELECT id, status
+            FROM integrity_case
+            WHERE exam_id = $1
+              AND student_id = $2
+              AND attempt_no = $3
+              AND status IN ('open', 'under_review', 'escalated')
+            ORDER BY opened_at DESC
+            LIMIT 1
+          `,
+          [examId, studentId, attemptNo]
+        );
+
+        let caseId = existingCase.rows[0]?.id || null;
+        if (!caseId) {
+          const createdCase = await client.query(
+            `
+              INSERT INTO integrity_case (
+                exam_id, student_id, attempt_no, current_score, threshold_at_open, summary
+              ) VALUES ($1, $2, $3, $4, $5, $6)
+              RETURNING id
+            `,
+            [
+              examId,
+              studentId,
+              attemptNo,
+              currentScore,
+              threshold,
+              "System-opened after suspicion score threshold was reached."
+            ]
+          );
+          caseId = createdCase.rows[0].id;
+        } else {
+          await client.query(
+            `
+              UPDATE integrity_case
+                 SET current_score = $2,
+                     status = CASE WHEN status = 'open' THEN 'under_review' ELSE status END
+               WHERE id = $1
+            `,
+            [caseId, currentScore]
+          );
+        }
+
+        await client.query(
+          `
+            INSERT INTO case_evidence (case_id, evidence_type, source_ref, payload)
+            VALUES ($1, 'integrity_event', $2, $3::jsonb)
+          `,
+          [
+            caseId,
+            String(eventResult.rows[0].id),
+            JSON.stringify({
+              event_type: eventResult.rows[0].event_type,
+              event_time: eventResult.rows[0].event_time,
+              weight: eventResult.rows[0].weight,
+              details: eventResult.rows[0].details
+            })
+          ]
+        );
+      }
 
       const candidateResult = await client.query(
         `
