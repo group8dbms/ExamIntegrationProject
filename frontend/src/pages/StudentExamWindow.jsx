@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 
 const ACTIVE_ATTEMPT_KEY = "exam-integrity-active-attempt";
-const EVIDENCE_CAPTURE_INTERVAL_MS = 15000;
+const EVIDENCE_CAPTURE_INTERVAL_MS = 5000;
 
 function getInheritedLaunchMedia(examId) {
   try {
