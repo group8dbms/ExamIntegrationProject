@@ -1446,8 +1446,8 @@ code {
 
 .screen-tile-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(110px, 110px));
-  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 130px));
+  gap: 0.85rem;
   align-items: start;
   justify-content: start;
 }
@@ -1462,7 +1462,7 @@ code {
   text-align: left;
   color: inherit;
   min-height: 100%;
-  width: 110px;
+  width: 130px;
 }
 
 .screen-tile-card.active {
@@ -1478,7 +1478,7 @@ code {
 
 .screen-tile-preview img {
   width: 100%;
-  height: 84px;
+  height: 96px;
   object-fit: cover;
   display: block;
 }
@@ -1511,12 +1511,12 @@ code {
 
 .screen-tile-meta span {
   color: #bfd5eb;
-  font-size: 0.66rem;
+  font-size: 0.7rem;
   line-height: 1.2;
 }
 
 .screen-tile-meta strong {
-  font-size: 0.74rem;
+  font-size: 0.8rem;
   line-height: 1.2;
 }
 

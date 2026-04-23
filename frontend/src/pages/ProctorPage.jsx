@@ -818,10 +818,10 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
                     <button
                       key={student.studentId}
                       type="button"
-                      className="screen-tile-card live-tile-card"
+                      className="screen-tile-card live-tile-card screen-share-tile-card"
                       onClick={() => window.open(student.latestEvidence.url, "_blank", "noopener,noreferrer")}
                     >
-                      <div className="screen-tile-preview">
+                      <div className="screen-tile-preview screen-share-tile-preview">
                         <img key={student.latestEvidence.id || student.latestEvidence.createdAt} src={student.latestEvidence.url} alt={student.studentName} />
                       </div>
                       <div className="screen-tile-meta tile-footer">
