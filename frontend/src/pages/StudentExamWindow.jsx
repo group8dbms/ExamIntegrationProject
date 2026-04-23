@@ -50,6 +50,8 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   const [integrityInfo, setIntegrityInfo] = useState({ tabSwitches: 0, copyAttempts: 0, pasteAttempts: 0, ipAddress: null, integrityScore: 0, caseStatus: "clear", submissionHashVerified: false });
   const [webcamStatus, setWebcamStatus] = useState("checking");
   const [webcamError, setWebcamError] = useState("");
+  const [screenShareStatus, setScreenShareStatus] = useState("checking");
+  const [screenShareError, setScreenShareError] = useState("");
   const [localWarning, setLocalWarning] = useState("");
   const [warningVersion, setWarningVersion] = useState(0);
   const [manualAutosaveNotice, setManualAutosaveNotice] = useState("");
@@ -71,6 +73,10 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   const webcamStreamRef = useRef(null);
   const webcamHealthRef = useRef(null);
   const webcamBlockReasonRef = useRef("");
+  const screenShareVideoRef = useRef(null);
+  const screenShareStreamRef = useRef(null);
+  const screenShareHealthRef = useRef(null);
+  const screenShareBlockReasonRef = useRef("");
 
   useEffect(() => {
     try {
@@ -102,6 +108,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     if (timerRef.current) window.clearInterval(timerRef.current);
     if (ipPollRef.current) window.clearInterval(ipPollRef.current);
     if (webcamHealthRef.current) window.clearInterval(webcamHealthRef.current);
+    if (screenShareHealthRef.current) window.clearInterval(screenShareHealthRef.current);
     document.removeEventListener("visibilitychange", handleVisibilityChange);
     window.removeEventListener("blur", handleWindowBlur);
     window.removeEventListener("copy", handleCopyAttempt);
@@ -109,6 +116,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     window.removeEventListener("beforeunload", handleBeforeUnload);
     window.removeEventListener("pagehide", handlePageHide);
     stopWebcamStream();
+    stopScreenShareStream();
   }
 
   function stopWebcamStream() {
@@ -200,6 +208,101 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     }
   }
 
+  function stopScreenShareStream() {
+    if (screenShareHealthRef.current) {
+      window.clearInterval(screenShareHealthRef.current);
+      screenShareHealthRef.current = null;
+    }
+
+    const stream = screenShareStreamRef.current;
+    if (stream) {
+      stream.getTracks().forEach((track) => {
+        track.onended = null;
+        track.stop();
+      });
+      screenShareStreamRef.current = null;
+    }
+
+    if (screenShareVideoRef.current) {
+      screenShareVideoRef.current.srcObject = null;
+    }
+  }
+
+  async function markScreenShareBlocked(reason, message, details = {}) {
+    stopScreenShareStream();
+    setScreenShareStatus("blocked");
+    setScreenShareError(message);
+    showLocalWarning(message);
+
+    if (screenShareBlockReasonRef.current === reason) {
+      return;
+    }
+    screenShareBlockReasonRef.current = reason;
+
+    await logIntegrityEvent("screen_share_block", {
+      reason,
+      message,
+      ...details
+    }, 5);
+  }
+
+  async function startScreenShareMonitoring() {
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      await markScreenShareBlocked("unsupported_browser", "This browser does not support screen sharing. Switch to a supported browser to continue.");
+      return false;
+    }
+
+    setScreenShareStatus("checking");
+    setScreenShareError("");
+
+    try {
+      stopScreenShareStream();
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          frameRate: { ideal: 10, max: 15 }
+        },
+        audio: false
+      });
+      const [track] = stream.getVideoTracks();
+      if (!track) {
+        throw new Error("No screen share track available.");
+      }
+
+      screenShareStreamRef.current = stream;
+      if (screenShareVideoRef.current) {
+        screenShareVideoRef.current.srcObject = stream;
+        await screenShareVideoRef.current.play().catch(() => null);
+      }
+
+      track.onended = () => {
+        void markScreenShareBlocked("share_stopped", "Screen sharing stopped during the exam. Start sharing again to continue.", {
+          label: track.label || "shared_screen"
+        });
+      };
+
+      screenShareHealthRef.current = window.setInterval(() => {
+        const activeTrack = screenShareStreamRef.current?.getVideoTracks()?.[0];
+        if (!activeTrack || activeTrack.readyState !== "live") {
+          void markScreenShareBlocked("share_inactive", "Screen sharing became unavailable during the exam. Restart sharing to continue.");
+        }
+      }, 5000);
+
+      screenShareBlockReasonRef.current = "";
+      setScreenShareStatus("active");
+      setScreenShareError("");
+      return true;
+    } catch (error) {
+      const isPermissionIssue = ["NotAllowedError", "PermissionDeniedError"].includes(error?.name || "");
+      await markScreenShareBlocked(
+        error?.name || "screen_share_unavailable",
+        isPermissionIssue
+          ? "Screen sharing was cancelled or denied. Start sharing your screen to continue the exam."
+          : "Screen sharing is required to continue this exam."
+      );
+      return false;
+    }
+  }
+
   async function loadExamWindow() {
     try {
       const data = await api(`/api/exams/${examId}/paper?studentId=${session.id}`);
@@ -223,6 +326,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
       setTimeLeft(Math.max(0, Math.floor((effectiveEnd - now) / 1000)));
 
       void startWebcamMonitoring();
+      void startScreenShareMonitoring();
 
       document.addEventListener("visibilitychange", handleVisibilityChange);
       window.addEventListener("blur", handleWindowBlur);
@@ -445,8 +549,8 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   async function submitExam(autoSubmit = false) {
     const activeExamPaper = examPaperRef.current;
     if (!activeExamPaper || submittedRef.current) return;
-    if (webcamStatus !== "active") {
-      setMessage("Reconnect the webcam before submitting the exam.");
+    if (webcamStatus !== "active" || screenShareStatus !== "active") {
+      setMessage("Reconnect the webcam and screen share before submitting the exam.");
       return;
     }
     submittedRef.current = true;
@@ -511,6 +615,8 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   const examMeta = examPaper?.exam;
   const summaryText = useMemo(() => `${integrityInfo.tabSwitches} tab switches | ${integrityInfo.copyAttempts} copy attempts | ${integrityInfo.pasteAttempts} paste attempts`, [integrityInfo]);
   const webcamBlocked = webcamStatus !== "active";
+  const screenShareBlocked = screenShareStatus !== "active";
+  const examInteractionBlocked = webcamBlocked || screenShareBlocked;
 
   if (!examPaper) {
     return <section className="workspace-shell exam-window-shell"><div className="task-card"><h2>Loading exam window...</h2></div></section>;
@@ -568,14 +674,28 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
               {webcamStatus === "active" ? "Refresh Webcam" : "Retry Webcam"}
             </button>
           </div>
+          <div className={`webcam-panel webcam-panel-${screenShareStatus}`}>
+            <div className="webcam-panel-header">
+              <strong>Screen Share</strong>
+              <span>{screenShareStatus === "active" ? "Active" : screenShareStatus === "checking" ? "Checking..." : "Blocked"}</span>
+            </div>
+            <div className="webcam-preview-frame">
+              <video ref={screenShareVideoRef} className="screen-share-preview" autoPlay muted playsInline />
+              {screenShareStatus !== "active" ? <div className="webcam-preview-overlay">{screenShareStatus === "checking" ? "Waiting for screen share..." : "Screen sharing required"}</div> : null}
+            </div>
+            <p className="info-line">{screenShareError || "Share your screen throughout the exam. If sharing stops, answering and submission are paused until it is restored."}</p>
+            <button type="button" className="secondary-button" onClick={() => void startScreenShareMonitoring()}>
+              {screenShareStatus === "active" ? "Refresh Screen Share" : "Start Screen Share"}
+            </button>
+          </div>
           <button type="button" className="secondary-button" onClick={() => autosaveAnswers(undefined, { manual: true })}>Save Progress</button>
         </div>
 
         <form className="task-card single-column" onSubmit={(event) => { event.preventDefault(); void submitExam(false); }}>
-          {webcamBlocked ? (
+          {examInteractionBlocked ? (
             <div className="webcam-blocker" role="alert" aria-live="assertive">
               <strong>Exam interactions are paused</strong>
-              <span>{webcamError || "Webcam access is required to continue answering and submit the exam."}</span>
+              <span>{webcamError || screenShareError || "Webcam and screen sharing are required to continue answering and submit the exam."}</span>
             </div>
           ) : null}
           <div className="question-list">
@@ -590,7 +710,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
                         type={question.question_type === "msq" ? "checkbox" : "radio"}
                         name={question.id}
                         checked={question.question_type === "msq" ? (answers[question.id] || []).includes(option) : answers[question.id] === option}
-                        disabled={webcamBlocked}
+                        disabled={examInteractionBlocked}
                         onChange={() => updateAnswer(question, option)}
                       />
                       {option}
@@ -601,7 +721,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
             ))}
           </div>
           <div className="form-actions">
-            <button className="primary-button" type="submit" disabled={webcamBlocked}>Submit Exam</button>
+            <button className="primary-button" type="submit" disabled={examInteractionBlocked}>Submit Exam</button>
             <button type="button" className="ghost-button" onClick={() => autosaveAnswers(undefined, { manual: true })}>Autosave Now</button>
           </div>
         </form>

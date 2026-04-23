@@ -22,7 +22,8 @@ BEGIN
             'device_change',
             'fullscreen_exit',
             'network_change',
-            'webcam_block'
+            'webcam_block',
+            'screen_share_block'
         );
     END IF;
 

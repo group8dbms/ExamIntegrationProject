@@ -12,6 +12,32 @@ function mapCaseStatus(value) {
   return value || "not_opened";
 }
 
+let integrityEventSchemaPromise = null;
+
+async function ensureIntegrityEventSchema() {
+  if (!integrityEventSchemaPromise) {
+    integrityEventSchemaPromise = pool.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1
+          FROM pg_type
+          WHERE typname = 'integrity_event_type'
+        ) THEN
+          BEGIN
+            ALTER TYPE integrity_event_type ADD VALUE IF NOT EXISTS 'screen_share_block';
+          EXCEPTION
+            WHEN duplicate_object THEN
+              NULL;
+          END;
+        END IF;
+      END $$;
+    `);
+  }
+
+  return integrityEventSchemaPromise;
+}
+
 function getDefaultIntegrityWeight(eventType) {
   switch (String(eventType || "")) {
     case "tab_switch":
@@ -32,6 +58,8 @@ function getDefaultIntegrityWeight(eventType) {
       return 3;
     case "webcam_block":
       return 4.5;
+    case "screen_share_block":
+      return 5;
     default:
       return 1;
   }
@@ -265,6 +293,8 @@ router.post(
   requireAuth,
   requireRole("student"),
   asyncHandler(async (req, res) => {
+    await ensureIntegrityEventSchema();
+
     const {
       examId,
       attemptNo = 1,
