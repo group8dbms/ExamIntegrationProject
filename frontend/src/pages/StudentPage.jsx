@@ -93,7 +93,7 @@ function computeStartState(item) {
   if (now < startAt) {
     return { label: "Not available to start now", disabled: true, tone: "muted" };
   }
-  if (now > endAt) {
+  if (now >= endAt) {
     return { label: "Exam window closed", disabled: true, tone: "danger" };
   }
   return { label: "Start Exam", disabled: false, tone: "success" };
@@ -295,9 +295,16 @@ async function logWebcamStartBlock(item, message, reason) {
     if (startingExamRef.current === examId || popupWatchersRef.current.has(examId)) {
       return;
     }
+    const startState = computeStartState(item);
+    if (startState.disabled) {
+      setMessage(startState.label === "Exam window closed"
+        ? "This exam deadline has passed, so the exam can no longer be started."
+        : startState.label);
+      return;
+    }
     startingExamRef.current = examId;
     setStartingExamId(examId);
-    setMessage("Opening the exam window. Camera and screen-sharing permissions will be requested there.");
+    setMessage("Opening the exam window. The exam will start only after webcam and screen-sharing permissions are granted there.");
 
     const url = new URL(window.location.href);
     url.search = `mode=exam&examId=${encodeURIComponent(examId)}`;
@@ -325,7 +332,7 @@ async function logWebcamStartBlock(item, message, reason) {
 
     popupWatchersRef.current.set(examId, { popup, intervalId });
     popup.focus();
-    setMessage("Exam window opened. Allow camera and screen sharing inside that window to begin the exam.");
+    setMessage("Exam window opened. Grant webcam and screen sharing there to begin the exam.");
     startingExamRef.current = "";
     setStartingExamId("");
   }
@@ -380,7 +387,7 @@ async function logWebcamStartBlock(item, message, reason) {
               disabled={state.disabled || startingExamId === item.id}
               onClick={() => void startExam(item)}
             >
-              {startingExamId === item.id ? "Checking webcam..." : state.label}
+              {startingExamId === item.id ? "Opening exam..." : state.label}
             </button>
           </div>
           <div className="student-exam-meta">

@@ -100,6 +100,8 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   const screenEvidenceEnabledRef = useRef(true);
   const screenEvidenceUploadingRef = useRef(false);
   const loadStartedRef = useRef(false);
+  const runtimeStartedRef = useRef(false);
+  const effectiveEndRef = useRef(0);
 
   useEffect(() => {
     try {
@@ -154,6 +156,92 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     window.removeEventListener("pagehide", handlePageHide);
     stopWebcamStream();
     stopScreenShareStream();
+    runtimeStartedRef.current = false;
+  }
+
+  function isExamDeadlineReached() {
+    return effectiveEndRef.current && Date.now() >= effectiveEndRef.current;
+  }
+
+  async function startExamRuntime() {
+    const activeExamPaper = examPaperRef.current;
+    if (!activeExamPaper || runtimeStartedRef.current) {
+      return false;
+    }
+    if (isExamDeadlineReached()) {
+      setTimeLeft(0);
+      setMessage("The exam deadline has passed, so this exam can no longer be started.");
+      return false;
+    }
+
+    const activeAttempt = localStorage.getItem(ACTIVE_ATTEMPT_KEY);
+    if (activeAttempt && activeAttempt !== `${activeExamPaper.exam.id}:${session.id}:${activeExamPaper.exam.attempt_no}`) {
+      await logIntegrityEvent("multiple_login", { note: "Another exam attempt window was already active." }, 4);
+    }
+    localStorage.setItem(ACTIVE_ATTEMPT_KEY, `${activeExamPaper.exam.id}:${session.id}:${activeExamPaper.exam.attempt_no}`);
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("blur", handleWindowBlur);
+    window.addEventListener("copy", handleCopyAttempt);
+    window.addEventListener("paste", handlePasteAttempt);
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("pagehide", handlePageHide);
+
+    timerRef.current = window.setInterval(() => {
+      setTimeLeft((current) => {
+        if (current <= 1) {
+          window.clearInterval(timerRef.current);
+          void submitExam(true);
+          return 0;
+        }
+        return current - 1;
+      });
+    }, 1000);
+
+    autosaveRef.current = window.setInterval(() => {
+      void autosaveAnswers(answersRef.current);
+    }, 15000);
+
+    await captureInitialEnvironment();
+    ipPollRef.current = window.setInterval(() => {
+      void checkIpChange();
+    }, 45000);
+
+    runtimeStartedRef.current = true;
+    setMessage(`Exam window started for ${activeExamPaper.exam.title}.`);
+    return true;
+  }
+
+  async function tryStartExamSession() {
+    if (isExamDeadlineReached()) {
+      setTimeLeft(0);
+      setMessage("The exam deadline has passed, so this exam can no longer be started.");
+      return false;
+    }
+
+    const webcamReady = webcamStatusRef.current === "active" ? true : await startWebcamMonitoring();
+    const screenShareReady = screenShareStatusRef.current === "active" ? true : await startScreenShareMonitoring();
+
+    if (!webcamReady || !screenShareReady) {
+      setMessage("Exam start is blocked until webcam and screen-sharing permissions are granted.");
+      return false;
+    }
+
+    return startExamRuntime();
+  }
+
+  async function retryWebcamAndResume() {
+    const ok = await startWebcamMonitoring();
+    if (ok && screenShareStatusRef.current === "active") {
+      await startExamRuntime();
+    }
+  }
+
+  async function retryScreenShareAndResume() {
+    const ok = await startScreenShareMonitoring();
+    if (ok && webcamStatusRef.current === "active") {
+      await startExamRuntime();
+    }
   }
 
   function stopWebcamStream() {
@@ -524,47 +612,18 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
       setAnswers(seed);
       answersRef.current = seed;
 
-      const activeAttempt = localStorage.getItem(ACTIVE_ATTEMPT_KEY);
-      if (activeAttempt && activeAttempt !== `${data.exam.id}:${session.id}:${data.exam.attempt_no}`) {
-        await logIntegrityEvent("multiple_login", { note: "Another exam attempt window was already active." }, 4);
-      }
-      localStorage.setItem(ACTIVE_ATTEMPT_KEY, `${data.exam.id}:${session.id}:${data.exam.attempt_no}`);
-
       const now = Date.now();
       const effectiveEnd = new Date(data.exam.effective_end_at || data.exam.end_at).getTime();
-      setTimeLeft(Math.max(0, Math.floor((effectiveEnd - now) / 1000)));
+      effectiveEndRef.current = effectiveEnd;
+      const remainingSeconds = Math.max(0, Math.floor((effectiveEnd - now) / 1000));
+      setTimeLeft(remainingSeconds);
 
-      void startWebcamMonitoring();
-      void startScreenShareMonitoring();
+      if (remainingSeconds <= 0) {
+        setMessage("The exam deadline has already passed, so this exam can no longer be started.");
+        return;
+      }
 
-      document.addEventListener("visibilitychange", handleVisibilityChange);
-      window.addEventListener("blur", handleWindowBlur);
-      window.addEventListener("copy", handleCopyAttempt);
-      window.addEventListener("paste", handlePasteAttempt);
-      window.addEventListener("beforeunload", handleBeforeUnload);
-      window.addEventListener("pagehide", handlePageHide);
-
-      timerRef.current = window.setInterval(() => {
-        setTimeLeft((current) => {
-          if (current <= 1) {
-            window.clearInterval(timerRef.current);
-            void submitExam(true);
-            return 0;
-          }
-          return current - 1;
-        });
-      }, 1000);
-
-      autosaveRef.current = window.setInterval(() => {
-        void autosaveAnswers(answersRef.current);
-      }, 15000);
-
-      await captureInitialEnvironment();
-      ipPollRef.current = window.setInterval(() => {
-        void checkIpChange();
-      }, 45000);
-
-      setMessage(`Exam window started for ${data.exam.title}.`);
+      await tryStartExamSession();
     } catch (error) {
       setMessage(error.message);
     }
@@ -879,7 +938,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
               {webcamStatus !== "active" ? <div className="webcam-preview-overlay">{webcamStatus === "checking" ? "Connecting camera..." : "Camera access required"}</div> : null}
             </div>
             <p className="info-line">{webcamError || "Keep your camera active throughout the exam. If the feed stops, exam actions are blocked until it is restored."}</p>
-            <button type="button" className="secondary-button" onClick={() => void startWebcamMonitoring()}>
+            <button type="button" className="secondary-button" onClick={() => void retryWebcamAndResume()}>
               {webcamStatus === "active" ? "Refresh Webcam" : "Retry Webcam"}
             </button>
           </div>
@@ -893,7 +952,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
               {screenShareStatus !== "active" ? <div className="webcam-preview-overlay">{screenShareStatus === "checking" ? "Waiting for screen share..." : "Screen sharing required"}</div> : null}
             </div>
             <p className="info-line">{screenShareError || "Share your screen throughout the exam. If sharing stops, answering and submission are paused until it is restored."}</p>
-            <button type="button" className="secondary-button" onClick={() => void startScreenShareMonitoring()}>
+            <button type="button" className="secondary-button" onClick={() => void retryScreenShareAndResume()}>
               {screenShareStatus === "active" ? "Refresh Screen Share" : "Start Screen Share"}
             </button>
           </div>
