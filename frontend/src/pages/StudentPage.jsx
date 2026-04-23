@@ -170,7 +170,7 @@ export default function StudentPage({ session, onLogout, setMessage }) {
     }
   }
 
-  async function logWebcamStartBlock(item, message, reason) {
+async function logWebcamStartBlock(item, message, reason) {
     try {
       await api("/api/integrity/events", {
         method: "POST",
@@ -192,6 +192,31 @@ export default function StudentPage({ session, onLogout, setMessage }) {
       });
     } catch {
       // Avoid blocking exam launch flow when webcam logging fails.
+    }
+  }
+
+  async function logScreenShareStartBlock(item, message, reason) {
+    try {
+      await api("/api/integrity/events", {
+        method: "POST",
+        body: JSON.stringify({
+          examId: item.id,
+          studentId: session.id,
+          attemptNo: item.attempt_no,
+          eventType: "screen_share_block",
+          weight: 5,
+          deviceFingerprint: buildDeviceFingerprint(),
+          createdBy: session.id,
+          actorRole: "student",
+          details: {
+            stage: "pre_exam_start",
+            reason,
+            message
+          }
+        })
+      });
+    } catch {
+      // Avoid blocking exam launch flow when screen-share logging fails.
     }
   }
 
@@ -220,24 +245,62 @@ export default function StudentPage({ session, onLogout, setMessage }) {
     }
   }
 
+  async function ensureScreenShareAccessBeforeStart(item) {
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      const message = "This browser does not support screen sharing. Use a supported browser before starting the exam.";
+      await logScreenShareStartBlock(item, message, "unsupported_browser");
+      setMessage(message);
+      return false;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          frameRate: { ideal: 10, max: 15 }
+        },
+        audio: false
+      });
+      stream.getTracks().forEach((track) => track.stop());
+      return true;
+    } catch (error) {
+      const message = ["NotAllowedError", "PermissionDeniedError"].includes(error?.name || "")
+        ? "Screen sharing was denied or cancelled. Start the exam again and allow sharing."
+        : "Screen sharing could not be started. Try again before launching the exam.";
+      await logScreenShareStartBlock(item, message, error?.name || "screen_share_unavailable");
+      setMessage(message);
+      return false;
+    }
+  }
+
   async function startExam(item) {
     const examId = item.id;
     setStartingExamId(examId);
-    setMessage("Checking webcam access before launching the exam window...");
-    const webcamReady = await ensureWebcamAccessBeforeStart(item);
-    if (!webcamReady) {
-      setStartingExamId("");
-      return;
-    }
-
     const url = new URL(window.location.href);
-    url.search = `mode=exam&examId=${encodeURIComponent(examId)}`;
+    url.search = "";
     const popup = window.open(url.toString(), `exam-window-${examId}`, "popup=yes,width=1440,height=920,resizable=yes,scrollbars=yes");
     if (!popup) {
       setMessage("Popup blocked. Allow popups for this site to start the exam window.");
       setStartingExamId("");
       return;
     }
+
+    setMessage("Checking webcam and screen-sharing permissions before launching the exam window...");
+    const webcamReady = await ensureWebcamAccessBeforeStart(item);
+    if (!webcamReady) {
+      popup.close();
+      setStartingExamId("");
+      return;
+    }
+
+    const screenShareReady = await ensureScreenShareAccessBeforeStart(item);
+    if (!screenShareReady) {
+      popup.close();
+      setStartingExamId("");
+      return;
+    }
+
+    url.search = `mode=exam&examId=${encodeURIComponent(examId)}`;
+    popup.location.href = url.toString();
 
     const previousWatcher = popupWatchersRef.current.get(examId);
     if (previousWatcher) {
