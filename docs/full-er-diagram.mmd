@@ -1,0 +1,241 @@
+%%{init: {
+  "theme": "base",
+  "themeVariables": {
+    "primaryTextColor": "#000000",
+    "secondaryTextColor": "#000000",
+    "tertiaryTextColor": "#000000",
+    "primaryBorderColor": "#222222",
+    "lineColor": "#222222",
+    "mainBkg": "#ffffff",
+    "fontFamily": "Arial"
+  }
+}}%%
+
+erDiagram
+    APP_USER {
+        uuid id PK
+        citext email UK
+        text full_name
+        user_role role
+        boolean is_active
+        boolean email_verified
+        timestamptz created_at
+    }
+
+    USER_SESSION {
+        bigint id PK
+        uuid user_id FK
+        timestamptz login_at
+        inet ip_address
+        text device_fingerprint
+        boolean is_active
+    }
+
+    EXAM {
+        uuid id PK
+        text title
+        text course_code
+        exam_status status
+        timestamptz start_at
+        timestamptz end_at
+        int duration_minutes
+        numeric integrity_threshold
+        uuid created_by FK
+    }
+
+    QUESTION_BANK {
+        uuid id PK
+        text title
+        text description
+        uuid created_by FK
+    }
+
+    QUESTION {
+        uuid id PK
+        uuid bank_id FK
+        uuid created_by FK
+        text question_type
+        text prompt
+        numeric default_marks
+        boolean is_active
+    }
+
+    EXAM_QUESTION {
+        uuid exam_id PK, FK
+        uuid question_id PK
+        int sequence_no
+        numeric marks_override
+        text question_type_snapshot
+        boolean is_required
+    }
+
+    EXAM_CANDIDATE {
+        uuid exam_id PK, FK
+        uuid student_id PK, FK
+        int attempt_no PK
+        submission_status status
+        timestamptz assigned_at
+        timestamptz started_at
+        timestamptz submitted_at
+        numeric suspicion_score
+    }
+
+    ANSWER_SUBMISSION {
+        uuid id PK
+        uuid exam_id FK
+        uuid student_id FK
+        int attempt_no FK
+        int autosave_version
+        submission_status status
+        text submission_hash
+        boolean hash_verified
+    }
+
+    INTEGRITY_EVENT {
+        bigint id PK
+        uuid exam_id FK
+        uuid student_id FK
+        int attempt_no FK
+        bigint session_id FK
+        integrity_event_type event_type
+        timestamptz event_time
+        numeric weight
+        uuid created_by FK
+    }
+
+    PROCTOR_FLAG {
+        uuid id PK
+        uuid exam_id FK
+        uuid student_id FK
+        int attempt_no FK
+        uuid flagged_by FK
+        smallint severity
+        text status
+    }
+
+    INTEGRITY_CASE {
+        uuid id PK
+        uuid exam_id FK
+        uuid student_id FK
+        int attempt_no FK
+        uuid opened_by FK
+        case_status status
+        decision_type decision
+        uuid resolved_by FK
+    }
+
+    CASE_EVIDENCE {
+        uuid id PK
+        uuid case_id FK
+        text evidence_type
+        uuid added_by FK
+        timestamptz added_at
+    }
+
+    CASE_ACTION {
+        uuid id PK
+        uuid case_id FK
+        text action_type
+        uuid action_by FK
+        timestamptz action_at
+    }
+
+    INTEGRITY_PENALTY_ASSIGNMENT {
+        uuid id PK
+        bigint event_id FK
+        uuid exam_id FK
+        uuid student_id FK
+        int attempt_no
+        numeric penalty_points
+        uuid assigned_by FK
+        timestamptz assigned_at
+    }
+
+    EVALUATION {
+        uuid id PK
+        uuid submission_id FK
+        uuid evaluator_id FK
+        numeric awarded_marks
+        timestamptz evaluated_at
+    }
+
+    RESULT {
+        uuid id PK
+        uuid exam_id FK
+        uuid student_id FK
+        uuid submission_id FK
+        numeric total_marks
+        numeric awarded_marks
+        result_status status
+        uuid published_by FK
+    }
+
+    RECHECK_REQUEST {
+        uuid id PK
+        uuid result_id FK
+        uuid student_id FK
+        recheck_status status
+        uuid reviewed_by FK
+        numeric adjusted_marks
+    }
+
+    AUDIT_LOG {
+        bigint id PK
+        uuid actor_user_id FK
+        user_role actor_role
+        text action
+        text entity_type
+        uuid entity_id
+    }
+
+    STORED_DOCUMENT {
+        uuid id PK
+        uuid exam_id FK
+        uuid student_id FK
+        uuid case_id FK
+        text document_type
+        text s3_key
+        uuid uploaded_by FK
+    }
+
+    APP_USER ||--o{ USER_SESSION : has
+    APP_USER ||--o{ EXAM : creates
+    APP_USER ||--o{ QUESTION_BANK : creates
+    APP_USER ||--o{ QUESTION : creates
+    APP_USER ||--o{ EXAM_CANDIDATE : attempts
+    APP_USER ||--o{ INTEGRITY_EVENT : logs
+    APP_USER ||--o{ PROCTOR_FLAG : flags
+    APP_USER ||--o{ INTEGRITY_CASE : opens_resolves
+    APP_USER ||--o{ CASE_EVIDENCE : adds
+    APP_USER ||--o{ CASE_ACTION : acts
+    APP_USER ||--o{ INTEGRITY_PENALTY_ASSIGNMENT : assigns
+    APP_USER ||--o{ EVALUATION : evaluates
+    APP_USER ||--o{ RESULT : publishes
+    APP_USER ||--o{ RECHECK_REQUEST : requests_reviews
+    APP_USER ||--o{ AUDIT_LOG : performs
+    APP_USER ||--o{ STORED_DOCUMENT : uploads
+
+    QUESTION_BANK ||--o{ QUESTION : contains
+    EXAM ||--o{ EXAM_QUESTION : includes
+    QUESTION ||--o{ EXAM_QUESTION : maps
+
+    EXAM ||--o{ EXAM_CANDIDATE : assigns
+    EXAM_CANDIDATE ||--|| ANSWER_SUBMISSION : produces
+    EXAM_CANDIDATE ||--o{ INTEGRITY_EVENT : records
+    EXAM_CANDIDATE ||--o{ PROCTOR_FLAG : raises
+    EXAM_CANDIDATE ||--o{ INTEGRITY_CASE : may_open
+
+    USER_SESSION ||--o{ INTEGRITY_EVENT : session_for
+    INTEGRITY_CASE ||--o{ CASE_EVIDENCE : has
+    INTEGRITY_CASE ||--o{ CASE_ACTION : has
+
+    INTEGRITY_EVENT ||--o| INTEGRITY_PENALTY_ASSIGNMENT : penalized_by
+    EXAM ||--o{ INTEGRITY_PENALTY_ASSIGNMENT : penalty_for
+
+    ANSWER_SUBMISSION ||--o| EVALUATION : evaluated_as
+    ANSWER_SUBMISSION ||--o| RESULT : yields
+    EXAM ||--o{ RESULT : generates
+    RESULT ||--o{ RECHECK_REQUEST : receives
+
+    EXAM ||--o{ STORED_DOCUMENT : has
+    INTEGRITY_CASE ||--o{ STORED_DOCUMENT : stores

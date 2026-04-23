@@ -1,0 +1,295 @@
+Table app_user {
+  id uuid [pk]
+  email citext [unique, not null]
+  full_name text [not null]
+  role user_role [not null]
+  password_hash text
+  password_reset_token_hash text
+  password_reset_sent_at timestamptz
+  password_reset_expires_at timestamptz
+  is_active boolean [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  email_verified boolean [not null]
+  email_verification_token text
+  verification_sent_at timestamptz
+  last_login_at timestamptz
+}
+
+Table user_session {
+  id bigint [pk]
+  user_id uuid [not null]
+  login_at timestamptz [not null]
+  logout_at timestamptz
+  ip_address inet
+  device_fingerprint text
+  user_agent text
+  session_token_hash text [not null]
+  is_active boolean [not null]
+}
+
+Table exam {
+  id uuid [pk]
+  title text [not null]
+  description text
+  course_code text [not null]
+  status exam_status [not null]
+  start_at timestamptz [not null]
+  end_at timestamptz [not null]
+  duration_minutes integer [not null]
+  integrity_threshold numeric(6,2) [not null]
+  rules jsonb [not null]
+  created_by uuid [not null]
+  published_at timestamptz
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table question_bank {
+  id uuid [pk]
+  title text [not null]
+  description text
+  created_by uuid [not null]
+  created_at timestamptz [not null]
+}
+
+Table question {
+  id uuid [pk]
+  bank_id uuid [not null]
+  created_by uuid [not null]
+  question_type text [not null]
+  prompt text [not null]
+  options jsonb [not null]
+  correct_answer jsonb
+  default_marks numeric(8,2) [not null]
+  metadata jsonb [not null]
+  is_active boolean [not null]
+  created_at timestamptz [not null]
+}
+
+Table exam_question {
+  exam_id uuid [pk, not null]
+  question_id uuid [pk, not null]
+  sequence_no integer [not null]
+  marks_override numeric(8,2)
+  question_type_snapshot text
+  prompt_snapshot text
+  options_snapshot jsonb [not null]
+  correct_answer_snapshot jsonb
+  default_marks_snapshot numeric(8,2)
+  metadata_snapshot jsonb [not null]
+  is_required boolean [not null]
+}
+
+Table exam_candidate {
+  exam_id uuid [pk, not null]
+  student_id uuid [pk, not null]
+  attempt_no integer [pk, not null]
+  assigned_at timestamptz [not null]
+  started_at timestamptz
+  submitted_at timestamptz
+  status submission_status [not null]
+  suspicion_score numeric(8,2) [not null]
+  last_ip inet
+  last_device text
+}
+
+Table answer_submission {
+  id uuid [pk]
+  exam_id uuid [not null]
+  student_id uuid [not null]
+  attempt_no integer [not null]
+  current_answers jsonb [not null]
+  final_answers jsonb
+  autosave_version integer [not null]
+  final_submitted_at timestamptz
+  status submission_status [not null]
+  submission_hash text
+  hash_algorithm text [not null]
+  hash_verified boolean [not null]
+  storage_metadata jsonb [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table integrity_event {
+  id bigint [pk]
+  exam_id uuid [not null]
+  student_id uuid [not null]
+  attempt_no integer [not null]
+  session_id bigint
+  event_type integrity_event_type [not null]
+  event_time timestamptz [not null]
+  weight numeric(8,2)
+  ip_address inet
+  device_fingerprint text
+  details jsonb [not null]
+  created_by uuid
+}
+
+Table proctor_flag {
+  id uuid [pk]
+  exam_id uuid [not null]
+  student_id uuid [not null]
+  attempt_no integer [not null]
+  flagged_by uuid [not null]
+  severity smallint [not null]
+  reason text [not null]
+  status text [not null]
+  created_at timestamptz [not null]
+}
+
+Table integrity_case {
+  id uuid [pk]
+  exam_id uuid [not null]
+  student_id uuid [not null]
+  attempt_no integer [not null]
+  opened_at timestamptz [not null]
+  opened_by uuid
+  status case_status [not null]
+  current_score numeric(8,2) [not null]
+  threshold_at_open numeric(8,2) [not null]
+  summary text
+  decision decision_type
+  decision_notes text
+  closed_at timestamptz
+  resolved_by uuid
+}
+
+Table case_evidence {
+  id uuid [pk]
+  case_id uuid [not null]
+  evidence_type text [not null]
+  source_ref text
+  payload jsonb [not null]
+  added_by uuid
+  added_at timestamptz [not null]
+}
+
+Table case_action {
+  id uuid [pk]
+  case_id uuid [not null]
+  action_type text [not null]
+  note text
+  payload jsonb [not null]
+  action_by uuid
+  action_at timestamptz [not null]
+}
+
+Table evaluation {
+  id uuid [pk]
+  submission_id uuid [not null, unique]
+  evaluator_id uuid [not null]
+  awarded_marks numeric(10,2) [not null]
+  feedback text
+  rubric_breakdown jsonb [not null]
+  evaluated_at timestamptz [not null]
+}
+
+Table result {
+  id uuid [pk]
+  exam_id uuid [not null]
+  student_id uuid [not null]
+  submission_id uuid [not null, unique]
+  total_marks numeric(10,2) [not null]
+  awarded_marks numeric(10,2) [not null]
+  integrity_score numeric(8,2) [not null]
+  case_status case_status
+  submission_hash_verified boolean [not null]
+  status result_status [not null]
+  published_by uuid
+  published_at timestamptz
+  created_at timestamptz [not null]
+}
+
+Table recheck_request {
+  id uuid [pk]
+  result_id uuid [not null]
+  student_id uuid [not null]
+  reason text [not null]
+  status recheck_status [not null]
+  requested_at timestamptz [not null]
+  reviewed_by uuid
+  reviewed_at timestamptz
+  decision_notes text
+  adjusted_marks numeric(10,2)
+}
+
+Table audit_log {
+  id bigint [pk]
+  actor_user_id uuid
+  actor_role user_role
+  action text [not null]
+  entity_type text [not null]
+  entity_id uuid
+  occurred_at timestamptz [not null]
+  ip_address inet
+  details jsonb [not null]
+}
+
+Table integrity_penalty_assignment {
+  id uuid [pk]
+  event_id bigint [not null, unique]
+  exam_id uuid [not null]
+  student_id uuid [not null]
+  attempt_no integer [not null]
+  penalty_points numeric(8,2) [not null]
+  note text
+  assigned_by uuid
+  assigned_at timestamptz [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table stored_document {
+  id uuid [pk]
+  exam_id uuid
+  student_id uuid
+  case_id uuid
+  document_type text [not null]
+  s3_key text [not null, unique]
+  original_name text
+  content_type text
+  uploaded_by uuid
+  created_at timestamptz [not null]
+}
+
+Ref: user_session.user_id > app_user.id
+Ref: exam.created_by > app_user.id
+Ref: question_bank.created_by > app_user.id
+Ref: question.created_by > app_user.id
+Ref: question.bank_id > question_bank.id
+Ref: exam_question.exam_id > exam.id
+Ref: exam_candidate.exam_id > exam.id
+Ref: exam_candidate.student_id > app_user.id
+Ref: answer_submission.(exam_id, student_id, attempt_no) > exam_candidate.(exam_id, student_id, attempt_no)
+Ref: integrity_event.session_id > user_session.id
+Ref: integrity_event.created_by > app_user.id
+Ref: integrity_event.(exam_id, student_id, attempt_no) > exam_candidate.(exam_id, student_id, attempt_no)
+Ref: proctor_flag.flagged_by > app_user.id
+Ref: proctor_flag.(exam_id, student_id, attempt_no) > exam_candidate.(exam_id, student_id, attempt_no)
+Ref: integrity_case.opened_by > app_user.id
+Ref: integrity_case.resolved_by > app_user.id
+Ref: integrity_case.(exam_id, student_id, attempt_no) > exam_candidate.(exam_id, student_id, attempt_no)
+Ref: case_evidence.case_id > integrity_case.id
+Ref: case_evidence.added_by > app_user.id
+Ref: case_action.case_id > integrity_case.id
+Ref: case_action.action_by > app_user.id
+Ref: evaluation.submission_id > answer_submission.id
+Ref: evaluation.evaluator_id > app_user.id
+Ref: result.exam_id > exam.id
+Ref: result.student_id > app_user.id
+Ref: result.submission_id > answer_submission.id
+Ref: result.published_by > app_user.id
+Ref: recheck_request.result_id > result.id
+Ref: recheck_request.student_id > app_user.id
+Ref: recheck_request.reviewed_by > app_user.id
+Ref: audit_log.actor_user_id > app_user.id
+Ref: integrity_penalty_assignment.event_id > integrity_event.id
+Ref: integrity_penalty_assignment.exam_id > exam.id
+Ref: integrity_penalty_assignment.student_id > app_user.id
+Ref: integrity_penalty_assignment.assigned_by > app_user.id
+Ref: stored_document.exam_id > exam.id
+Ref: stored_document.student_id > app_user.id
+Ref: stored_document.case_id > integrity_case.id
+Ref: stored_document.uploaded_by > app_user.id

@@ -33,6 +33,7 @@ It is built for institutions that want controlled online exams with accountabili
 - views assigned exams and their current status
 - starts exams only during the valid exam window
 - answers questions in a dedicated exam window
+- grants webcam and screen-sharing permission inside the exam popup before attempting
 - benefits from background autosave and manual autosave
 - submits the final attempt securely
 - sees attempt status such as assigned, attempted, closed, submitted, graded, or not appeared
@@ -53,6 +54,8 @@ It is built for institutions that want controlled online exams with accountabili
 - opens integrity cases and records proctor decisions
 - generates integrity evidence when case decisions are saved
 - approves admin requests to reopen closed or interrupted attempts
+- monitors live shared-screen and webcam snapshot boards per current exam
+- opens stored integrity reports, shared-screen evidence, and webcam evidence directly from the dashboard
 
 ### Auditor
 - reviews audit logs and exam-wise audit summaries
@@ -100,6 +103,9 @@ It is built for institutions that want controlled online exams with accountabili
 - manual `Autosave Now` action
 - manual autosave success notification shown only on manual click
 - final submission flow
+- webcam enforcement inside the popup window
+- screen-sharing enforcement inside the popup window
+- periodic webcam and shared-screen evidence capture
 
 ### 6. Attempt Safety And Closure Logic
 - detects when an exam attempt is closed unexpectedly
@@ -112,6 +118,8 @@ It is built for institutions that want controlled online exams with accountabili
 - logs suspicious actions during the exam
 - tracks tab switches
 - tracks focus loss and exit-screen events
+- tracks webcam-denied or webcam-disconnected states
+- tracks screen-share denied or stopped states
 - records IP-related and device-related details
 - surfaces warnings to the student in the exam window
 - preserves all events for later proctor and auditor review
@@ -130,6 +138,8 @@ It is built for institutions that want controlled online exams with accountabili
 - penalties can be assigned event by event
 - integrity cases can be opened, updated, and closed
 - case decisions are recorded before publishing
+- current-exam monitoring tabs show live-updating shared-screen and webcam tiles
+- proctors can open stored evidence files directly from closed case reviews
 
 ### 10. Reassign And Reopen Workflow
 - admin gets a separate tab to review student attempts and request reopening
@@ -165,6 +175,8 @@ It is built for institutions that want controlled online exams with accountabili
 - generated documents can be stored in S3 when configured
 - auditors can review stored document metadata and evidence trails
 - submission hash verification supports audit confidence
+- webcam snapshots and shared-screen snapshots are stored as evidence documents
+- result publication re-verifies submission hashes before report generation
 
 ### 15. UI And Usability Improvements
 - compact row-based proctor review cards
@@ -182,17 +194,24 @@ The latest round of changes added the following:
 - closed attempts are blocked from restarting
 - no-show students after deadline are auto-marked as `not appeared`, assigned `0`, and marked evaluated
 - closed attempts can also be auto-assigned `0` and treated as evaluated
-- evaluator cannot edit marks for those auto-evaluated zero-mark cases
+- evaluator cannot edit marks after `Save Marks`, and auto-evaluated zero-mark cases stay frozen
 - admin can request reassign for interrupted or closed attempts
 - proctor can approve reassign requests from a dedicated tab
-- result publishing is locked until approval is obtained
-- request approval is highlighted while publish stays greyed out
+- result publishing is locked until approval is obtained, and once approved only the publish action remains active
 - failed students now receive correct failed-result email wording
 - question bank questions now carry course-code tags
 - question bank search supports subject-wise reuse
 - question bank preview and selection now support pagination
 - proctor suspicious-event review is shown row-wise inside one card per student
 - admin assignment and reassign interfaces are more compact and easier to scan
+- integrity threshold logic was restored so suspicious-score breaches auto-open or refresh integrity cases again
+- admin `Quizzes Active` now hides exams whose end time has already passed
+- publish flow re-verifies submission hashes just before generating reports
+- hash verification failures now withhold the result and instruct the student to contact the proctor or admin instead of publishing a normal result
+- student exam popup now enforces webcam and shared-screen permission inside the exam window
+- webcam and screen-share stop events block continued answering until restored
+- webcam snapshots and shared-screen snapshots are captured every `5` seconds and stored through the document pipeline
+- proctor dashboard now has dedicated current-exam tiles for shared-screen and webcam evidence, refreshing with the latest snapshot per student
 
 ## Technology Stack
 
@@ -359,6 +378,8 @@ When configured, the system stores these document types in S3:
 
 - `result_report`
 - `integrity_evidence`
+- `screen_share_evidence`
+- `webcam_evidence`
 
 Their metadata remains in PostgreSQL so the application can retrieve and audit them.
 

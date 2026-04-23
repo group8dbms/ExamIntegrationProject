@@ -1,0 +1,231 @@
+{
+  "tables": [
+    {
+      "name": "app_user",
+      "primaryKey": ["id"],
+      "columns": [
+        {"name": "id", "type": "uuid"},
+        {"name": "email", "type": "citext", "unique": true},
+        {"name": "full_name", "type": "text"},
+        {"name": "role", "type": "user_role"},
+        {"name": "email_verified", "type": "boolean"},
+        {"name": "is_active", "type": "boolean"}
+      ]
+    },
+    {
+      "name": "user_session",
+      "primaryKey": ["id"],
+      "columns": [
+        {"name": "id", "type": "bigint"},
+        {"name": "user_id", "type": "uuid"},
+        {"name": "login_at", "type": "timestamptz"}
+      ]
+    },
+    {
+      "name": "exam",
+      "primaryKey": ["id"],
+      "columns": [
+        {"name": "id", "type": "uuid"},
+        {"name": "title", "type": "text"},
+        {"name": "course_code", "type": "text"},
+        {"name": "created_by", "type": "uuid"}
+      ]
+    },
+    {
+      "name": "question_bank",
+      "primaryKey": ["id"],
+      "columns": [
+        {"name": "id", "type": "uuid"},
+        {"name": "created_by", "type": "uuid"}
+      ]
+    },
+    {
+      "name": "question",
+      "primaryKey": ["id"],
+      "columns": [
+        {"name": "id", "type": "uuid"},
+        {"name": "bank_id", "type": "uuid"},
+        {"name": "created_by", "type": "uuid"}
+      ]
+    },
+    {
+      "name": "exam_question",
+      "primaryKey": ["exam_id", "question_id"],
+      "columns": [
+        {"name": "exam_id", "type": "uuid"},
+        {"name": "question_id", "type": "uuid"},
+        {"name": "sequence_no", "type": "integer"}
+      ]
+    },
+    {
+      "name": "exam_candidate",
+      "primaryKey": ["exam_id", "student_id", "attempt_no"],
+      "columns": [
+        {"name": "exam_id", "type": "uuid"},
+        {"name": "student_id", "type": "uuid"},
+        {"name": "attempt_no", "type": "integer"},
+        {"name": "status", "type": "submission_status"}
+      ]
+    },
+    {
+      "name": "answer_submission",
+      "primaryKey": ["id"],
+      "columns": [
+        {"name": "id", "type": "uuid"},
+        {"name": "exam_id", "type": "uuid"},
+        {"name": "student_id", "type": "uuid"},
+        {"name": "attempt_no", "type": "integer"}
+      ]
+    },
+    {
+      "name": "integrity_event",
+      "primaryKey": ["id"],
+      "columns": [
+        {"name": "id", "type": "bigint"},
+        {"name": "exam_id", "type": "uuid"},
+        {"name": "student_id", "type": "uuid"},
+        {"name": "attempt_no", "type": "integer"},
+        {"name": "session_id", "type": "bigint"}
+      ]
+    },
+    {
+      "name": "proctor_flag",
+      "primaryKey": ["id"],
+      "columns": [
+        {"name": "id", "type": "uuid"},
+        {"name": "exam_id", "type": "uuid"},
+        {"name": "student_id", "type": "uuid"},
+        {"name": "attempt_no", "type": "integer"},
+        {"name": "flagged_by", "type": "uuid"}
+      ]
+    },
+    {
+      "name": "integrity_case",
+      "primaryKey": ["id"],
+      "columns": [
+        {"name": "id", "type": "uuid"},
+        {"name": "exam_id", "type": "uuid"},
+        {"name": "student_id", "type": "uuid"},
+        {"name": "attempt_no", "type": "integer"}
+      ]
+    },
+    {
+      "name": "case_evidence",
+      "primaryKey": ["id"],
+      "columns": [
+        {"name": "id", "type": "uuid"},
+        {"name": "case_id", "type": "uuid"},
+        {"name": "added_by", "type": "uuid"}
+      ]
+    },
+    {
+      "name": "case_action",
+      "primaryKey": ["id"],
+      "columns": [
+        {"name": "id", "type": "uuid"},
+        {"name": "case_id", "type": "uuid"},
+        {"name": "action_by", "type": "uuid"}
+      ]
+    },
+    {
+      "name": "evaluation",
+      "primaryKey": ["id"],
+      "columns": [
+        {"name": "id", "type": "uuid"},
+        {"name": "submission_id", "type": "uuid"},
+        {"name": "evaluator_id", "type": "uuid"}
+      ]
+    },
+    {
+      "name": "result",
+      "primaryKey": ["id"],
+      "columns": [
+        {"name": "id", "type": "uuid"},
+        {"name": "exam_id", "type": "uuid"},
+        {"name": "student_id", "type": "uuid"},
+        {"name": "submission_id", "type": "uuid"}
+      ]
+    },
+    {
+      "name": "recheck_request",
+      "primaryKey": ["id"],
+      "columns": [
+        {"name": "id", "type": "uuid"},
+        {"name": "result_id", "type": "uuid"},
+        {"name": "student_id", "type": "uuid"},
+        {"name": "reviewed_by", "type": "uuid"}
+      ]
+    },
+    {
+      "name": "audit_log",
+      "primaryKey": ["id"],
+      "columns": [
+        {"name": "id", "type": "bigint"},
+        {"name": "actor_user_id", "type": "uuid"}
+      ]
+    },
+    {
+      "name": "integrity_penalty_assignment",
+      "primaryKey": ["id"],
+      "columns": [
+        {"name": "id", "type": "uuid"},
+        {"name": "event_id", "type": "bigint"},
+        {"name": "exam_id", "type": "uuid"},
+        {"name": "student_id", "type": "uuid"},
+        {"name": "assigned_by", "type": "uuid"}
+      ]
+    },
+    {
+      "name": "stored_document",
+      "primaryKey": ["id"],
+      "columns": [
+        {"name": "id", "type": "uuid"},
+        {"name": "exam_id", "type": "uuid"},
+        {"name": "student_id", "type": "uuid"},
+        {"name": "case_id", "type": "uuid"},
+        {"name": "uploaded_by", "type": "uuid"}
+      ]
+    }
+  ],
+  "relationships": [
+    {"from": "user_session.user_id", "to": "app_user.id"},
+    {"from": "exam.created_by", "to": "app_user.id"},
+    {"from": "question_bank.created_by", "to": "app_user.id"},
+    {"from": "question.created_by", "to": "app_user.id"},
+    {"from": "question.bank_id", "to": "question_bank.id"},
+    {"from": "exam_question.exam_id", "to": "exam.id"},
+    {"from": "exam_candidate.exam_id", "to": "exam.id"},
+    {"from": "exam_candidate.student_id", "to": "app_user.id"},
+    {"from": "answer_submission.(exam_id,student_id,attempt_no)", "to": "exam_candidate.(exam_id,student_id,attempt_no)"},
+    {"from": "integrity_event.session_id", "to": "user_session.id"},
+    {"from": "integrity_event.created_by", "to": "app_user.id"},
+    {"from": "integrity_event.(exam_id,student_id,attempt_no)", "to": "exam_candidate.(exam_id,student_id,attempt_no)"},
+    {"from": "proctor_flag.flagged_by", "to": "app_user.id"},
+    {"from": "proctor_flag.(exam_id,student_id,attempt_no)", "to": "exam_candidate.(exam_id,student_id,attempt_no)"},
+    {"from": "integrity_case.opened_by", "to": "app_user.id"},
+    {"from": "integrity_case.resolved_by", "to": "app_user.id"},
+    {"from": "integrity_case.(exam_id,student_id,attempt_no)", "to": "exam_candidate.(exam_id,student_id,attempt_no)"},
+    {"from": "case_evidence.case_id", "to": "integrity_case.id"},
+    {"from": "case_evidence.added_by", "to": "app_user.id"},
+    {"from": "case_action.case_id", "to": "integrity_case.id"},
+    {"from": "case_action.action_by", "to": "app_user.id"},
+    {"from": "evaluation.submission_id", "to": "answer_submission.id"},
+    {"from": "evaluation.evaluator_id", "to": "app_user.id"},
+    {"from": "result.exam_id", "to": "exam.id"},
+    {"from": "result.student_id", "to": "app_user.id"},
+    {"from": "result.submission_id", "to": "answer_submission.id"},
+    {"from": "result.published_by", "to": "app_user.id"},
+    {"from": "recheck_request.result_id", "to": "result.id"},
+    {"from": "recheck_request.student_id", "to": "app_user.id"},
+    {"from": "recheck_request.reviewed_by", "to": "app_user.id"},
+    {"from": "audit_log.actor_user_id", "to": "app_user.id"},
+    {"from": "integrity_penalty_assignment.event_id", "to": "integrity_event.id"},
+    {"from": "integrity_penalty_assignment.exam_id", "to": "exam.id"},
+    {"from": "integrity_penalty_assignment.student_id", "to": "app_user.id"},
+    {"from": "integrity_penalty_assignment.assigned_by", "to": "app_user.id"},
+    {"from": "stored_document.exam_id", "to": "exam.id"},
+    {"from": "stored_document.student_id", "to": "app_user.id"},
+    {"from": "stored_document.case_id", "to": "integrity_case.id"},
+    {"from": "stored_document.uploaded_by", "to": "app_user.id"}
+  ]
+}

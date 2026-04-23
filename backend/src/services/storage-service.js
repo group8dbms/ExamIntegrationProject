@@ -14,7 +14,15 @@ function getS3Client() {
   }
 
   if (!s3Client) {
-    s3Client = new S3Client({ region: env.awsRegion });
+    s3Client = new S3Client({
+      region: env.awsRegion,
+      credentials: env.awsAccessKeyId && env.awsSecretAccessKey
+        ? {
+            accessKeyId: env.awsAccessKeyId,
+            secretAccessKey: env.awsSecretAccessKey
+          }
+        : undefined
+    });
   }
 
   return s3Client;

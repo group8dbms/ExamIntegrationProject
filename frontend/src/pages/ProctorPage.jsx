@@ -94,7 +94,6 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
   const [screenEvidenceDirectory, setScreenEvidenceDirectory] = useState([]);
   const [selectedScreenStudentId, setSelectedScreenStudentId] = useState("");
   const [webcamEvidenceByStudent, setWebcamEvidenceByStudent] = useState({});
-  const [selectedWebcamStudentId, setSelectedWebcamStudentId] = useState("");
   const [integrityEvidenceByStudent, setIntegrityEvidenceByStudent] = useState({});
   const [penaltyDrafts, setPenaltyDrafts] = useState({});
   const [decisionDrafts, setDecisionDrafts] = useState({});
@@ -124,10 +123,6 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
     })),
     [studentLogs]
   );
-  const selectedScreenStudent = useMemo(
-    () => screenEvidenceDirectory.find((item) => item.studentId === selectedScreenStudentId) || null,
-    [screenEvidenceDirectory, selectedScreenStudentId]
-  );
   const webcamEvidenceDirectory = useMemo(
     () => studentLogs
       .map((student) => {
@@ -142,10 +137,6 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
       })
       .filter(Boolean),
     [studentLogs, webcamEvidenceByStudent]
-  );
-  const selectedWebcamStudent = useMemo(
-    () => webcamEvidenceDirectory.find((item) => item.studentId === selectedWebcamStudentId) || null,
-    [webcamEvidenceDirectory, selectedWebcamStudentId]
   );
 
   async function ensureSelectedExam(nextTab = monitorTab) {
@@ -171,7 +162,6 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
         setStudentLogs([]);
         setScreenEvidenceDirectory([]);
         setSelectedScreenStudentId("");
-        setSelectedWebcamStudentId("");
         setWebcamEvidenceByStudent({});
         setIntegrityEvidenceByStudent({});
         setPenaltyDrafts({});
@@ -352,15 +342,8 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
       }
 
       setWebcamEvidenceByStudent(nextEvidence);
-      setSelectedWebcamStudentId((current) => {
-        if (current && Object.prototype.hasOwnProperty.call(nextEvidence, current) && nextEvidence[current]?.length) {
-          return current;
-        }
-        return Object.keys(nextEvidence).find((key) => nextEvidence[key]?.length) || "";
-      });
     } catch {
       setWebcamEvidenceByStudent({});
-      setSelectedWebcamStudentId("");
     }
   }
 
@@ -503,7 +486,7 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
         <div className="view-switcher nested-switcher">
           <button type="button" className={monitorTab === "cases" ? "view-pill active" : "view-pill"} onClick={() => setMonitorTab("cases")}>Case Review</button>
           <button type="button" className={monitorTab === "screen_tiles" ? "view-pill active" : "view-pill"} onClick={() => setMonitorTab("screen_tiles")}>Screen Tiles</button>
-          <button type="button" className={monitorTab === "screen_content" ? "view-pill active" : "view-pill"} onClick={() => setMonitorTab("screen_content")}>Webcam Snapshots</button>
+          <button type="button" className={monitorTab === "screen_content" ? "view-pill active" : "view-pill"} onClick={() => setMonitorTab("screen_content")}>Webcam Tiles</button>
         </div>
 
         {monitorTab === "cases" ? (
@@ -787,6 +770,7 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
               </div>
               <button type="button" className="secondary-button" onClick={() => void ensureSelectedExam("screen_tiles")}>Load Current Exam</button>
             </div>
+            <p className="info-line">One live shared-screen tile per student. The latest screenshot replaces the older one as fresh captures arrive.</p>
             {renderCurrentExamSelector("screen_tiles")}
             {selectedExamId ? (
               screenEvidenceDirectory.length ? (
@@ -795,18 +779,16 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
                     <button
                       key={student.studentId}
                       type="button"
-                      className={selectedScreenStudentId === student.studentId ? "screen-tile-card active" : "screen-tile-card"}
-                      onClick={() => {
-                        setSelectedScreenStudentId(student.studentId);
-                      }}
+                      className="screen-tile-card live-tile-card"
+                      onClick={() => window.open(student.latestEvidence.url, "_blank", "noopener,noreferrer")}
                     >
                       <div className="screen-tile-preview">
                         <img src={student.latestEvidence.url} alt={student.studentName} />
                       </div>
-                      <div className="screen-tile-meta">
+                      <div className="screen-tile-meta tile-footer">
                         <strong>{student.studentName}</strong>
                         <span>Student ID: {student.studentId}</span>
-                        <span>Latest capture: {formatDateTime(student.latestEvidence.createdAt)}</span>
+                        <span>Updated: {formatDateTime(student.latestEvidence.createdAt)}</span>
                       </div>
                     </button>
                   ))}
@@ -818,56 +800,36 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
           <div className="task-card">
             <div className="task-card-header">
               <div>
-                <h3>Shared Screen Content</h3>
+                <h3>Webcam Tiles</h3>
                 <span className="info-line">{selectedExam ? `${selectedExam.title} | ${selectedExam.course_code}` : "Choose a current exam below"}</span>
               </div>
               <button type="button" className="secondary-button" onClick={() => void ensureSelectedExam("screen_content")}>Load Current Exam</button>
             </div>
+            <p className="info-line">One live webcam tile per student. The latest screenshot replaces the older one as fresh captures arrive.</p>
             {renderCurrentExamSelector("screen_content")}
             {selectedExamId ? (
               webcamEvidenceDirectory.length ? (
-                <div className="screen-content-layout">
-                  <div className="screen-content-summary">
-                    <strong>{selectedWebcamStudent?.studentName || "Select a student"}</strong>
-                    <span>Student ID: {selectedWebcamStudent?.studentId || "-"}</span>
-                    <span>Screenshots: {selectedWebcamStudent?.items.length || 0}</span>
-                  </div>
-                  <div className="screen-tile-grid">
-                    {webcamEvidenceDirectory.map((student) => (
-                      <button
-                        key={student.studentId}
-                        type="button"
-                        className={selectedWebcamStudentId === student.studentId ? "screen-tile-card active" : "screen-tile-card"}
-                        onClick={() => setSelectedWebcamStudentId(student.studentId)}
-                      >
-                        <div className="screen-tile-preview">
-                          <img src={student.latestEvidence.url} alt={student.studentName} />
-                        </div>
-                        <div className="screen-tile-meta">
-                          <strong>{student.studentName}</strong>
-                          <span>Student ID: {student.studentId}</span>
-                          <span>Latest capture: {formatDateTime(student.latestEvidence.createdAt)}</span>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="proctor-evidence-grid">
-                    {(selectedWebcamStudent?.items || []).map((item) => (
-                      <a
-                        key={item.id}
-                        className="proctor-evidence-card"
-                        href={item.url}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        <img src={item.url} alt={item.originalName || "Webcam snapshot"} />
-                        <span>{formatDateTime(item.createdAt)}</span>
-                      </a>
-                    ))}
-                  </div>
+                <div className="screen-tile-grid">
+                  {webcamEvidenceDirectory.map((student) => (
+                    <button
+                      key={student.studentId}
+                      type="button"
+                      className="screen-tile-card live-tile-card"
+                      onClick={() => window.open(student.latestEvidence.url, "_blank", "noopener,noreferrer")}
+                    >
+                      <div className="screen-tile-preview">
+                        <img src={student.latestEvidence.url} alt={student.studentName} />
+                      </div>
+                      <div className="screen-tile-meta tile-footer">
+                        <strong>{student.studentName}</strong>
+                        <span>Student ID: {student.studentId}</span>
+                        <span>Updated: {formatDateTime(student.latestEvidence.createdAt)}</span>
+                      </div>
+                    </button>
+                  ))}
                 </div>
               ) : <p>No webcam snapshots have been captured for this exam yet.</p>
-            ) : <p>Select a current exam above to load shared screen contents.</p>}
+            ) : <p>Select a current exam above to load webcam tiles.</p>}
           </div>
         )}
       </div>

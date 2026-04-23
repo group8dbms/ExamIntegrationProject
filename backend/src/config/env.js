@@ -28,6 +28,8 @@ const env = {
   smtpFrom: process.env.SMTP_FROM || "",
   awsRegion: process.env.AWS_REGION || "",
   s3Bucket: process.env.S3_BUCKET || "",
+  awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID || "",
+  awsSecretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || "",
   maxUploadSizeBytes: Number(process.env.MAX_UPLOAD_SIZE_BYTES || 10 * 1024 * 1024)
 };
 

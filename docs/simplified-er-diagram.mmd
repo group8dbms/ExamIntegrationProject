@@ -1,0 +1,116 @@
+%%{init: {
+  "theme": "base",
+  "themeVariables": {
+    "primaryTextColor": "#000000",
+    "secondaryTextColor": "#000000",
+    "tertiaryTextColor": "#000000",
+    "primaryBorderColor": "#222222",
+    "lineColor": "#222222",
+    "mainBkg": "#ffffff",
+    "fontFamily": "Arial"
+  }
+}}%%
+erDiagram
+    APP_USER {
+        uuid id PK
+        text full_name
+        text email
+        text role
+    }
+    EXAM {
+        uuid id PK
+        text title
+        text course_code
+        text status
+        datetime start_at
+        datetime end_at
+        int duration_minutes
+    }
+    QUESTION_BANK {
+        uuid id PK
+        text title
+    }
+    QUESTION {
+        uuid id PK
+        uuid bank_id FK
+        text question_type
+        text prompt
+    }
+    EXAM_QUESTION {
+        uuid exam_id PK
+        uuid question_id PK
+        int sequence_no
+    }
+    EXAM_CANDIDATE {
+        uuid exam_id PK
+        uuid student_id PK
+        int attempt_no PK
+        text status
+        numeric suspicion_score
+    }
+    ANSWER_SUBMISSION {
+        uuid id PK
+        uuid exam_id FK
+        uuid student_id FK
+        int attempt_no FK
+        int autosave_version
+        text status
+        text submission_hash
+    }
+    INTEGRITY_EVENT {
+        bigint id PK
+        uuid exam_id FK
+        uuid student_id FK
+        int attempt_no FK
+        text event_type
+        numeric weight
+    }
+    INTEGRITY_CASE {
+        uuid id PK
+        uuid exam_id FK
+        uuid student_id FK
+        int attempt_no FK
+        text status
+        text decision
+    }
+    EVALUATION {
+        uuid id PK
+        uuid submission_id FK
+        uuid evaluator_id FK
+        numeric awarded_marks
+    }
+    RESULT {
+        uuid id PK
+        uuid exam_id FK
+        uuid student_id FK
+        uuid submission_id FK
+        numeric awarded_marks
+        text status
+    }
+    RECHECK_REQUEST {
+        uuid id PK
+        uuid result_id FK
+        uuid student_id FK
+        text status
+    }
+    AUDIT_LOG {
+        bigint id PK
+        uuid actor_user_id FK
+        text action
+        text entity_type
+    }
+
+    APP_USER ||--o{ EXAM : creates
+    APP_USER ||--o{ QUESTION_BANK : creates
+    QUESTION_BANK ||--o{ QUESTION : contains
+    EXAM ||--o{ EXAM_QUESTION : includes
+    QUESTION ||--o{ EXAM_QUESTION : maps
+    EXAM ||--o{ EXAM_CANDIDATE : assigns
+    APP_USER ||--o{ EXAM_CANDIDATE : attempts
+    EXAM_CANDIDATE ||--|| ANSWER_SUBMISSION : produces
+    EXAM_CANDIDATE ||--o{ INTEGRITY_EVENT : logs
+    EXAM_CANDIDATE ||--o{ INTEGRITY_CASE : may_open
+    ANSWER_SUBMISSION ||--o| EVALUATION : evaluated
+    ANSWER_SUBMISSION ||--o| RESULT : generates
+    RESULT ||--o{ RECHECK_REQUEST : has
+    APP_USER ||--o{ AUDIT_LOG : performs
