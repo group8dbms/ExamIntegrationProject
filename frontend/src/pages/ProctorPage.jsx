@@ -90,6 +90,7 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
   const [selectedExam, setSelectedExam] = useState(null);
   const [studentLogs, setStudentLogs] = useState([]);
   const [screenEvidenceByStudent, setScreenEvidenceByStudent] = useState({});
+  const [webcamEvidenceByStudent, setWebcamEvidenceByStudent] = useState({});
   const [penaltyDrafts, setPenaltyDrafts] = useState({});
   const [decisionDrafts, setDecisionDrafts] = useState({});
   const [reassignRequests, setReassignRequests] = useState([]);
@@ -145,7 +146,10 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
       setSelectedExamId(examId);
       setSelectedExam(data.exam || null);
       setStudentLogs(data.items || []);
-      await loadScreenEvidence(examId, data.items || []);
+      await Promise.all([
+        loadScreenEvidence(examId, data.items || []),
+        loadWebcamEvidence(examId, data.items || [])
+      ]);
 
       const nextDrafts = {};
       const nextDecisionDrafts = {};
@@ -218,6 +222,44 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
       setScreenEvidenceByStudent(nextEvidence);
     } catch {
       setScreenEvidenceByStudent({});
+    }
+  }
+
+  async function loadWebcamEvidence(examId, students) {
+    try {
+      const documents = await api(`/api/documents?examId=${examId}&documentType=webcam_evidence`);
+      const docsByStudent = new Map();
+
+      for (const item of documents.items || []) {
+        const key = String(item.student_id || "");
+        if (!docsByStudent.has(key)) {
+          docsByStudent.set(key, []);
+        }
+        docsByStudent.get(key).push(item);
+      }
+
+      const nextEvidence = {};
+      for (const student of students) {
+        const items = (docsByStudent.get(String(student.studentId)) || []).slice(0, 6);
+        nextEvidence[student.studentId] = await Promise.all(items.map(async (item) => {
+          try {
+            const access = await api(`/api/documents/${item.id}/access-url`);
+            return {
+              id: item.id,
+              createdAt: item.created_at,
+              originalName: item.original_name,
+              url: access.url
+            };
+          } catch {
+            return null;
+          }
+        }));
+        nextEvidence[student.studentId] = nextEvidence[student.studentId].filter(Boolean);
+      }
+
+      setWebcamEvidenceByStudent(nextEvidence);
+    } catch {
+      setWebcamEvidenceByStudent({});
     }
   }
 
@@ -392,6 +434,31 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
                               rel="noreferrer"
                             >
                               <img src={item.url} alt={item.originalName || "Screen evidence"} />
+                              <span>{formatDateTime(item.createdAt)}</span>
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {webcamEvidenceByStudent[student.studentId]?.length ? (
+                      <div className="proctor-evidence-panel">
+                        <div className="task-card-header">
+                          <div>
+                            <h3>Webcam Evidence</h3>
+                            <p className="info-line">Latest webcam snapshots captured during this exam attempt.</p>
+                          </div>
+                        </div>
+                        <div className="proctor-evidence-grid">
+                          {webcamEvidenceByStudent[student.studentId].map((item) => (
+                            <a
+                              key={item.id}
+                              className="proctor-evidence-card"
+                              href={item.url}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              <img src={item.url} alt={item.originalName || "Webcam evidence"} />
                               <span>{formatDateTime(item.createdAt)}</span>
                             </a>
                           ))}

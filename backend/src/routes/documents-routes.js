@@ -9,11 +9,11 @@ const { isStorageConfigured, uploadBuffer, createDownloadUrl } = require("../ser
 const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
-const ALLOWED_DOCUMENT_TYPES = new Set(["result_report", "integrity_evidence", "screen_share_evidence"]);
+const ALLOWED_DOCUMENT_TYPES = new Set(["result_report", "integrity_evidence", "screen_share_evidence", "webcam_evidence"]);
 
 function canAccessDocument(user, document) {
   if (["admin", "auditor"].includes(user.role)) return true;
-  if (user.role === "proctor") return ["integrity_evidence", "screen_share_evidence"].includes(document.document_type);
+  if (user.role === "proctor") return ["integrity_evidence", "screen_share_evidence", "webcam_evidence"].includes(document.document_type);
   if (user.role === "student") {
     return document.document_type === "result_report" && String(document.student_id) === String(user.id);
   }
@@ -31,6 +31,8 @@ function buildDocumentKey({ examId, studentId, documentType, originalName }) {
     ? "reports"
     : documentType === "screen_share_evidence"
       ? "screen-share-evidence"
+      : documentType === "webcam_evidence"
+        ? "webcam-evidence"
       : "integrity-evidence";
   return `${prefix}/${examId}/${studentId}/${Date.now()}-${safeName}`;
 }
@@ -115,7 +117,7 @@ router.post(
     const uploadedBy = req.user.id;
 
     if (!ALLOWED_DOCUMENT_TYPES.has(documentType)) {
-      return res.status(400).json({ message: "documentType must be result_report, integrity_evidence, or screen_share_evidence." });
+      return res.status(400).json({ message: "documentType must be result_report, integrity_evidence, screen_share_evidence, or webcam_evidence." });
     }
 
     if (!examId || !studentId) {
@@ -127,8 +129,8 @@ router.post(
     }
 
     if (req.user.role === "student") {
-      if (documentType !== "screen_share_evidence") {
-        return res.status(403).json({ message: "Students can upload only screen_share_evidence documents." });
+      if (!["screen_share_evidence", "webcam_evidence"].includes(documentType)) {
+        return res.status(403).json({ message: "Students can upload only screen_share_evidence or webcam_evidence documents." });
       }
 
       if (String(studentId) !== String(req.user.id)) {

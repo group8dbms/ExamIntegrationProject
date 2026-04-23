@@ -73,6 +73,9 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   const webcamStreamRef = useRef(null);
   const webcamHealthRef = useRef(null);
   const webcamBlockReasonRef = useRef("");
+  const webcamEvidenceIntervalRef = useRef(null);
+  const webcamEvidenceEnabledRef = useRef(true);
+  const webcamEvidenceUploadingRef = useRef(false);
   const screenShareVideoRef = useRef(null);
   const screenShareStreamRef = useRef(null);
   const screenShareHealthRef = useRef(null);
@@ -111,6 +114,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     if (timerRef.current) window.clearInterval(timerRef.current);
     if (ipPollRef.current) window.clearInterval(ipPollRef.current);
     if (webcamHealthRef.current) window.clearInterval(webcamHealthRef.current);
+    if (webcamEvidenceIntervalRef.current) window.clearInterval(webcamEvidenceIntervalRef.current);
     if (screenShareHealthRef.current) window.clearInterval(screenShareHealthRef.current);
     if (screenEvidenceIntervalRef.current) window.clearInterval(screenEvidenceIntervalRef.current);
     document.removeEventListener("visibilitychange", handleVisibilityChange);
@@ -128,6 +132,10 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
       window.clearInterval(webcamHealthRef.current);
       webcamHealthRef.current = null;
     }
+    if (webcamEvidenceIntervalRef.current) {
+      window.clearInterval(webcamEvidenceIntervalRef.current);
+      webcamEvidenceIntervalRef.current = null;
+    }
 
     const stream = webcamStreamRef.current;
     if (stream) {
@@ -140,6 +148,79 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
 
     if (webcamVideoRef.current) {
       webcamVideoRef.current.srcObject = null;
+    }
+  }
+
+  async function uploadWebcamEvidence(reason = "interval") {
+    const activeExamPaper = examPaperRef.current;
+    const token = sessionTokenRef.current;
+    const video = webcamVideoRef.current;
+    if (!activeExamPaper || !token || !webcamEvidenceEnabledRef.current || webcamEvidenceUploadingRef.current) {
+      return;
+    }
+    if (!video || webcamStatus !== "active" || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+      return;
+    }
+
+    const targetWidth = Math.min(video.videoWidth, 960);
+    const scale = targetWidth / video.videoWidth;
+    const targetHeight = Math.max(1, Math.round(video.videoHeight * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return;
+    }
+
+    context.translate(targetWidth, 0);
+    context.scale(-1, 1);
+    context.drawImage(video, 0, 0, targetWidth, targetHeight);
+    webcamEvidenceUploadingRef.current = true;
+
+    try {
+      const blob = await new Promise((resolve) => {
+        canvas.toBlob((value) => resolve(value), "image/jpeg", 0.72);
+      });
+
+      if (!blob) {
+        return;
+      }
+
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const formData = new FormData();
+      formData.append("file", blob, `webcam-${reason}-${timestamp}.jpg`);
+      formData.append("examId", activeExamPaper.exam.id);
+      formData.append("studentId", session.id);
+      formData.append("documentType", "webcam_evidence");
+      formData.append("actorRole", "student");
+
+      const response = await fetch("/api/documents/upload", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`
+        },
+        body: formData
+      });
+
+      if (!response.ok) {
+        const contentType = response.headers.get("content-type") || "";
+        const payload = contentType.includes("application/json")
+          ? await response.json()
+          : await response.text();
+        const message = payload?.message || payload || "Evidence upload failed.";
+
+        if (response.status === 400 && /not configured/i.test(String(message))) {
+          webcamEvidenceEnabledRef.current = false;
+          return;
+        }
+
+        throw new Error(String(message));
+      }
+    } catch (error) {
+      console.warn("Failed to upload webcam evidence", error);
+    } finally {
+      webcamEvidenceUploadingRef.current = false;
     }
   }
 
@@ -201,6 +282,16 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
           void markWebcamBlocked("stream_inactive", "Webcam feed became unavailable during the exam. Retry camera access to continue.");
         }
       }, 5000);
+      webcamEvidenceEnabledRef.current = true;
+      if (webcamEvidenceIntervalRef.current) {
+        window.clearInterval(webcamEvidenceIntervalRef.current);
+      }
+      webcamEvidenceIntervalRef.current = window.setInterval(() => {
+        void uploadWebcamEvidence("interval");
+      }, 60000);
+      window.setTimeout(() => {
+        void uploadWebcamEvidence("initial");
+      }, 10000);
 
       webcamBlockReasonRef.current = "";
       setWebcamStatus("active");
