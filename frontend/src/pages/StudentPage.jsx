@@ -316,7 +316,7 @@ async function logWebcamStartBlock(item, message, reason) {
 
     const url = new URL(window.location.href);
     url.search = `mode=exam&examId=${encodeURIComponent(examId)}`;
-    const popup = window.open(url.toString(), `exam-window-${examId}`, "popup=yes,width=1440,height=920,resizable=yes,scrollbars=yes");
+    const popup = window.open("about:blank", `exam-window-${examId}`, "popup=yes,width=1440,height=920,resizable=yes,scrollbars=yes");
     if (!popup) {
       cleanupLaunchMedia(examId);
       setMessage("Popup blocked. Allow popups for this site to start the exam window.");
@@ -328,6 +328,7 @@ async function logWebcamStartBlock(item, message, reason) {
     // exam page can reuse them even if opener lookups are restricted.
     popup.__examInheritedMedia = store[examId];
     popup.__examInheritedExamId = examId;
+    popup.location.replace(url.toString());
 
     const previousWatcher = popupWatchersRef.current.get(examId);
     if (previousWatcher) {
