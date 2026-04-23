@@ -292,43 +292,16 @@ async function logWebcamStartBlock(item, message, reason) {
   async function startExam(item) {
     const examId = item.id;
     setStartingExamId(examId);
-    setMessage("Checking webcam and screen-sharing permissions before launching the exam window...");
-    const webcamStream = await ensureWebcamAccessBeforeStart(item);
-    if (!webcamStream) {
-      setStartingExamId("");
-      return;
-    }
-
-    const screenShareStream = await ensureScreenShareAccessBeforeStart(item);
-    if (!screenShareStream) {
-      webcamStream.getTracks().forEach((track) => track.stop());
-      setStartingExamId("");
-      return;
-    }
-
-    const store = getExamLaunchMediaStore();
-    cleanupLaunchMedia(examId);
-    store[examId] = {
-      webcamStream,
-      screenShareStream,
-      createdAt: Date.now()
-    };
+    setMessage("Opening the exam window. Camera and screen-sharing permissions will be requested there.");
 
     const url = new URL(window.location.href);
     url.search = `mode=exam&examId=${encodeURIComponent(examId)}`;
-    const popup = window.open("about:blank", `exam-window-${examId}`, "popup=yes,width=1440,height=920,resizable=yes,scrollbars=yes");
+    const popup = window.open(url.toString(), `exam-window-${examId}`, "popup=yes,width=1440,height=920,resizable=yes,scrollbars=yes");
     if (!popup) {
-      cleanupLaunchMedia(examId);
       setMessage("Popup blocked. Allow popups for this site to start the exam window.");
       setStartingExamId("");
       return;
     }
-
-    // Mirror the approved media streams onto the popup window itself so the
-    // exam page can reuse them even if opener lookups are restricted.
-    popup.__examInheritedMedia = store[examId];
-    popup.__examInheritedExamId = examId;
-    popup.location.replace(url.toString());
 
     const previousWatcher = popupWatchersRef.current.get(examId);
     if (previousWatcher) {
@@ -346,7 +319,7 @@ async function logWebcamStartBlock(item, message, reason) {
 
     popupWatchersRef.current.set(examId, { popup, intervalId });
     popup.focus();
-    setMessage("Exam window opened. Countdown and integrity monitoring start inside that window.");
+    setMessage("Exam window opened. Allow camera and screen sharing inside that window to begin the exam.");
     setStartingExamId("");
   }
 
