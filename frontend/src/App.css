@@ -1446,21 +1446,23 @@ code {
 
 .screen-tile-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 0.85rem;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 110px));
+  gap: 0.75rem;
   align-items: start;
+  justify-content: start;
 }
 
 .screen-tile-card {
   display: grid;
-  gap: 0.65rem;
-  padding: 0.7rem;
-  border-radius: 18px;
+  gap: 0.45rem;
+  padding: 0.55rem;
+  border-radius: 16px;
   border: 1px solid rgba(111, 166, 217, 0.18);
   background: rgba(8, 16, 26, 0.78);
   text-align: left;
   color: inherit;
   min-height: 100%;
+  width: 110px;
 }
 
 .screen-tile-card.active {
@@ -1470,13 +1472,13 @@ code {
 
 .screen-tile-preview {
   overflow: hidden;
-  border-radius: 12px;
+  border-radius: 10px;
   border: 1px solid rgba(126, 174, 214, 0.14);
 }
 
 .screen-tile-preview img {
   width: 100%;
-  height: 118px;
+  height: 84px;
   object-fit: cover;
   display: block;
 }
@@ -1499,8 +1501,8 @@ code {
 
 .screen-tile-meta {
   display: grid;
-  gap: 0.2rem;
-  padding: 0.12rem 0.05rem 0.08rem;
+  gap: 0.16rem;
+  padding: 0.06rem 0.02rem 0;
 }
 
 .tile-footer {
@@ -1509,11 +1511,13 @@ code {
 
 .screen-tile-meta span {
   color: #bfd5eb;
-  font-size: 0.77rem;
+  font-size: 0.66rem;
+  line-height: 1.2;
 }
 
 .screen-tile-meta strong {
-  font-size: 0.9rem;
+  font-size: 0.74rem;
+  line-height: 1.2;
 }
 
 .live-tile-card {
