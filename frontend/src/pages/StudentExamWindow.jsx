@@ -27,11 +27,29 @@ function formatDuration(totalSeconds) {
   return `${hours}:${minutes}:${seconds}`;
 }
 
+function getWebcamErrorMessage(error) {
+  switch (error?.name) {
+    case "NotAllowedError":
+    case "PermissionDeniedError":
+      return "Webcam permission was denied. Re-enable camera access to continue the exam.";
+    case "NotFoundError":
+    case "DevicesNotFoundError":
+      return "No webcam was detected. Connect a camera and retry to continue the exam.";
+    case "NotReadableError":
+    case "TrackStartError":
+      return "The webcam is busy in another application. Close the other app and retry.";
+    default:
+      return "Webcam access is required to continue this exam.";
+  }
+}
+
 export default function StudentExamWindow({ session, examId, onExit, setMessage }) {
   const [examPaper, setExamPaper] = useState(null);
   const [answers, setAnswers] = useState({});
   const [timeLeft, setTimeLeft] = useState(0);
   const [integrityInfo, setIntegrityInfo] = useState({ tabSwitches: 0, copyAttempts: 0, pasteAttempts: 0, ipAddress: null, integrityScore: 0, caseStatus: "clear", submissionHashVerified: false });
+  const [webcamStatus, setWebcamStatus] = useState("checking");
+  const [webcamError, setWebcamError] = useState("");
   const [localWarning, setLocalWarning] = useState("");
   const [warningVersion, setWarningVersion] = useState(0);
   const [manualAutosaveNotice, setManualAutosaveNotice] = useState("");
@@ -49,6 +67,10 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   const pasteCountRef = useRef(0);
   const isClosingRef = useRef(false);
   const sessionTokenRef = useRef("");
+  const webcamVideoRef = useRef(null);
+  const webcamStreamRef = useRef(null);
+  const webcamHealthRef = useRef(null);
+  const webcamBlockReasonRef = useRef("");
 
   useEffect(() => {
     try {
@@ -79,12 +101,103 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     if (autosaveRef.current) window.clearInterval(autosaveRef.current);
     if (timerRef.current) window.clearInterval(timerRef.current);
     if (ipPollRef.current) window.clearInterval(ipPollRef.current);
+    if (webcamHealthRef.current) window.clearInterval(webcamHealthRef.current);
     document.removeEventListener("visibilitychange", handleVisibilityChange);
     window.removeEventListener("blur", handleWindowBlur);
     window.removeEventListener("copy", handleCopyAttempt);
     window.removeEventListener("paste", handlePasteAttempt);
     window.removeEventListener("beforeunload", handleBeforeUnload);
     window.removeEventListener("pagehide", handlePageHide);
+    stopWebcamStream();
+  }
+
+  function stopWebcamStream() {
+    if (webcamHealthRef.current) {
+      window.clearInterval(webcamHealthRef.current);
+      webcamHealthRef.current = null;
+    }
+
+    const stream = webcamStreamRef.current;
+    if (stream) {
+      stream.getTracks().forEach((track) => {
+        track.onended = null;
+        track.stop();
+      });
+      webcamStreamRef.current = null;
+    }
+
+    if (webcamVideoRef.current) {
+      webcamVideoRef.current.srcObject = null;
+    }
+  }
+
+  async function markWebcamBlocked(reason, message, details = {}) {
+    stopWebcamStream();
+    setWebcamStatus("blocked");
+    setWebcamError(message);
+    showLocalWarning(message);
+
+    if (webcamBlockReasonRef.current === reason) {
+      return;
+    }
+    webcamBlockReasonRef.current = reason;
+
+    await logIntegrityEvent("webcam_block", {
+      reason,
+      message,
+      ...details
+    }, 4.5);
+  }
+
+  async function startWebcamMonitoring() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      await markWebcamBlocked("unsupported_browser", "This browser does not support webcam access. Switch to a supported browser to continue.");
+      return false;
+    }
+
+    setWebcamStatus("checking");
+    setWebcamError("");
+
+    try {
+      stopWebcamStream();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: "user"
+        },
+        audio: false
+      });
+      const [track] = stream.getVideoTracks();
+      if (!track) {
+        throw new Error("No video track available.");
+      }
+
+      webcamStreamRef.current = stream;
+      if (webcamVideoRef.current) {
+        webcamVideoRef.current.srcObject = stream;
+        await webcamVideoRef.current.play().catch(() => null);
+      }
+
+      track.onended = () => {
+        void markWebcamBlocked("stream_ended", "Webcam feed stopped during the exam. Reconnect the camera to continue.", {
+          label: track.label || "unknown_camera"
+        });
+      };
+
+      webcamHealthRef.current = window.setInterval(() => {
+        const activeTrack = webcamStreamRef.current?.getVideoTracks()?.[0];
+        if (!activeTrack || activeTrack.readyState !== "live") {
+          void markWebcamBlocked("stream_inactive", "Webcam feed became unavailable during the exam. Retry camera access to continue.");
+        }
+      }, 5000);
+
+      webcamBlockReasonRef.current = "";
+      setWebcamStatus("active");
+      setWebcamError("");
+      return true;
+    } catch (error) {
+      await markWebcamBlocked(error?.name || "webcam_unavailable", getWebcamErrorMessage(error));
+      return false;
+    }
   }
 
   async function loadExamWindow() {
@@ -108,6 +221,8 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
       const now = Date.now();
       const effectiveEnd = new Date(data.exam.effective_end_at || data.exam.end_at).getTime();
       setTimeLeft(Math.max(0, Math.floor((effectiveEnd - now) / 1000)));
+
+      void startWebcamMonitoring();
 
       document.addEventListener("visibilitychange", handleVisibilityChange);
       window.addEventListener("blur", handleWindowBlur);
@@ -330,6 +445,10 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   async function submitExam(autoSubmit = false) {
     const activeExamPaper = examPaperRef.current;
     if (!activeExamPaper || submittedRef.current) return;
+    if (webcamStatus !== "active") {
+      setMessage("Reconnect the webcam before submitting the exam.");
+      return;
+    }
     submittedRef.current = true;
     cleanupRuntime();
     try {
@@ -391,6 +510,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
 
   const examMeta = examPaper?.exam;
   const summaryText = useMemo(() => `${integrityInfo.tabSwitches} tab switches | ${integrityInfo.copyAttempts} copy attempts | ${integrityInfo.pasteAttempts} paste attempts`, [integrityInfo]);
+  const webcamBlocked = webcamStatus !== "active";
 
   if (!examPaper) {
     return <section className="workspace-shell exam-window-shell"><div className="task-card"><h2>Loading exam window...</h2></div></section>;
@@ -434,10 +554,30 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
           <p className="info-line">Do not switch tabs, copy, or paste. Integrity events are recorded in real time and reviewed later by the proctor.</p>
           <p className="info-line">Current IP: {integrityInfo.ipAddress || "Checking..."}</p>
           <p className="info-line">Submission hash verified: {integrityInfo.submissionHashVerified ? "Yes" : "Pending final verification"}</p>
+          <div className={`webcam-panel webcam-panel-${webcamStatus}`}>
+            <div className="webcam-panel-header">
+              <strong>Webcam Status</strong>
+              <span>{webcamStatus === "active" ? "Active" : webcamStatus === "checking" ? "Checking..." : "Blocked"}</span>
+            </div>
+            <div className="webcam-preview-frame">
+              <video ref={webcamVideoRef} className="webcam-preview" autoPlay muted playsInline />
+              {webcamStatus !== "active" ? <div className="webcam-preview-overlay">{webcamStatus === "checking" ? "Connecting camera..." : "Camera access required"}</div> : null}
+            </div>
+            <p className="info-line">{webcamError || "Keep your camera active throughout the exam. If the feed stops, exam actions are blocked until it is restored."}</p>
+            <button type="button" className="secondary-button" onClick={() => void startWebcamMonitoring()}>
+              {webcamStatus === "active" ? "Refresh Webcam" : "Retry Webcam"}
+            </button>
+          </div>
           <button type="button" className="secondary-button" onClick={() => autosaveAnswers(undefined, { manual: true })}>Save Progress</button>
         </div>
 
         <form className="task-card single-column" onSubmit={(event) => { event.preventDefault(); void submitExam(false); }}>
+          {webcamBlocked ? (
+            <div className="webcam-blocker" role="alert" aria-live="assertive">
+              <strong>Exam interactions are paused</strong>
+              <span>{webcamError || "Webcam access is required to continue answering and submit the exam."}</span>
+            </div>
+          ) : null}
           <div className="question-list">
             {examPaper.questions.map((question) => (
               <div className="list-item question-sheet-card" key={question.id}>
@@ -450,6 +590,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
                         type={question.question_type === "msq" ? "checkbox" : "radio"}
                         name={question.id}
                         checked={question.question_type === "msq" ? (answers[question.id] || []).includes(option) : answers[question.id] === option}
+                        disabled={webcamBlocked}
                         onChange={() => updateAnswer(question, option)}
                       />
                       {option}
@@ -460,7 +601,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
             ))}
           </div>
           <div className="form-actions">
-            <button className="primary-button" type="submit">Submit Exam</button>
+            <button className="primary-button" type="submit" disabled={webcamBlocked}>Submit Exam</button>
             <button type="button" className="ghost-button" onClick={() => autosaveAnswers(undefined, { manual: true })}>Autosave Now</button>
           </div>
         </form>

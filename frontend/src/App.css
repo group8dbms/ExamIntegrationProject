@@ -1324,6 +1324,78 @@ code {
   padding: 1rem 1.1rem;
 }
 
+.webcam-panel {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.95rem;
+  border-radius: 20px;
+  border: 1px solid rgba(91, 186, 255, 0.2);
+  background: linear-gradient(180deg, rgba(12, 24, 37, 0.95), rgba(8, 16, 26, 0.93));
+}
+
+.webcam-panel-active {
+  border-color: rgba(97, 221, 163, 0.34);
+}
+
+.webcam-panel-checking,
+.webcam-panel-blocked {
+  border-color: rgba(255, 163, 96, 0.34);
+}
+
+.webcam-panel-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.webcam-panel-header span {
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #bcd7f6;
+}
+
+.webcam-preview-frame {
+  position: relative;
+  min-height: 190px;
+  overflow: hidden;
+  border-radius: 18px;
+  border: 1px solid rgba(120, 181, 226, 0.18);
+  background: radial-gradient(circle at top, rgba(39, 68, 98, 0.45), rgba(8, 14, 22, 0.96));
+}
+
+.webcam-preview {
+  width: 100%;
+  height: 100%;
+  min-height: 190px;
+  object-fit: cover;
+  display: block;
+  transform: scaleX(-1);
+}
+
+.webcam-preview-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  text-align: center;
+  color: #fff0de;
+  background: rgba(7, 12, 18, 0.72);
+  backdrop-filter: blur(5px);
+}
+
+.webcam-blocker {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.95rem 1rem;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 171, 109, 0.34);
+  background: linear-gradient(180deg, rgba(72, 37, 14, 0.97), rgba(35, 20, 10, 0.94));
+  color: #ffe6c9;
+}
+
 @media (max-width: 980px) {
   .student-exam-meta,
   .student-result-meta,

@@ -1,6 +1,31 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 
+function buildDeviceFingerprint() {
+  return [
+    navigator.userAgent,
+    navigator.language,
+    navigator.platform,
+    `${window.screen.width}x${window.screen.height}`
+  ].join("|");
+}
+
+function getWebcamErrorMessage(error) {
+  switch (error?.name) {
+    case "NotAllowedError":
+    case "PermissionDeniedError":
+      return "Webcam permission was denied. Allow camera access before starting the exam.";
+    case "NotFoundError":
+    case "DevicesNotFoundError":
+      return "No webcam was detected on this device. Connect a camera before starting the exam.";
+    case "NotReadableError":
+    case "TrackStartError":
+      return "The webcam is currently unavailable. Close other apps using the camera and try again.";
+    default:
+      return "Webcam access is required before the exam can start.";
+  }
+}
+
 function formatDateTime(value) {
   return new Date(value).toLocaleString();
 }
@@ -71,6 +96,7 @@ export default function StudentPage({ session, onLogout, setMessage }) {
   const [assigned, setAssigned] = useState([]);
   const [publishedResults, setPublishedResults] = useState([]);
   const [recheckDrafts, setRecheckDrafts] = useState({});
+  const [startingExamId, setStartingExamId] = useState("");
   const popupWatchersRef = useRef(new Map());
 
   useEffect(() => {
@@ -144,13 +170,72 @@ export default function StudentPage({ session, onLogout, setMessage }) {
     }
   }
 
-  function startExam(item) {
+  async function logWebcamStartBlock(item, message, reason) {
+    try {
+      await api("/api/integrity/events", {
+        method: "POST",
+        body: JSON.stringify({
+          examId: item.id,
+          studentId: session.id,
+          attemptNo: item.attempt_no,
+          eventType: "webcam_block",
+          weight: 4.5,
+          deviceFingerprint: buildDeviceFingerprint(),
+          createdBy: session.id,
+          actorRole: "student",
+          details: {
+            stage: "pre_exam_start",
+            reason,
+            message
+          }
+        })
+      });
+    } catch {
+      // Avoid blocking exam launch flow when webcam logging fails.
+    }
+  }
+
+  async function ensureWebcamAccessBeforeStart(item) {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      const message = "This browser does not support webcam access. Use a supported browser before starting the exam.";
+      await logWebcamStartBlock(item, message, "unsupported_browser");
+      setMessage(message);
+      return false;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: "user"
+        },
+        audio: false
+      });
+      stream.getTracks().forEach((track) => track.stop());
+      return true;
+    } catch (error) {
+      const message = getWebcamErrorMessage(error);
+      await logWebcamStartBlock(item, message, error?.name || "webcam_unavailable");
+      setMessage(message);
+      return false;
+    }
+  }
+
+  async function startExam(item) {
     const examId = item.id;
+    setStartingExamId(examId);
+    setMessage("Checking webcam access before launching the exam window...");
+    const webcamReady = await ensureWebcamAccessBeforeStart(item);
+    if (!webcamReady) {
+      setStartingExamId("");
+      return;
+    }
+
     const url = new URL(window.location.href);
     url.search = `mode=exam&examId=${encodeURIComponent(examId)}`;
     const popup = window.open(url.toString(), `exam-window-${examId}`, "popup=yes,width=1440,height=920,resizable=yes,scrollbars=yes");
     if (!popup) {
       setMessage("Popup blocked. Allow popups for this site to start the exam window.");
+      setStartingExamId("");
       return;
     }
 
@@ -170,6 +255,7 @@ export default function StudentPage({ session, onLogout, setMessage }) {
     popupWatchersRef.current.set(examId, { popup, intervalId });
     popup.focus();
     setMessage("Exam window opened. Countdown and integrity monitoring start inside that window.");
+    setStartingExamId("");
   }
 
   async function openResultReport(documentId) {
@@ -219,10 +305,10 @@ export default function StudentPage({ session, onLogout, setMessage }) {
             <button
               className={state.tone === "success" ? "start-button success" : state.tone === "danger" ? "start-button danger" : "start-button muted"}
               type="button"
-              disabled={state.disabled}
-              onClick={() => startExam(item)}
+              disabled={state.disabled || startingExamId === item.id}
+              onClick={() => void startExam(item)}
             >
-              {state.label}
+              {startingExamId === item.id ? "Checking webcam..." : state.label}
             </button>
           </div>
           <div className="student-exam-meta">
