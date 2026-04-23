@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS stored_document (
     exam_id UUID REFERENCES exam(id) ON DELETE CASCADE,
     student_id UUID REFERENCES app_user(id) ON DELETE CASCADE,
     case_id UUID REFERENCES integrity_case(id) ON DELETE SET NULL,
-    document_type TEXT NOT NULL CHECK (document_type IN ('result_report', 'integrity_evidence')),
+    document_type TEXT NOT NULL CHECK (document_type IN ('result_report', 'integrity_evidence', 'screen_share_evidence')),
     s3_key TEXT NOT NULL UNIQUE,
     original_name TEXT,
     content_type TEXT,

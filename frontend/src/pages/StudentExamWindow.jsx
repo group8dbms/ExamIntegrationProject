@@ -77,6 +77,9 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   const screenShareStreamRef = useRef(null);
   const screenShareHealthRef = useRef(null);
   const screenShareBlockReasonRef = useRef("");
+  const screenEvidenceIntervalRef = useRef(null);
+  const screenEvidenceEnabledRef = useRef(true);
+  const screenEvidenceUploadingRef = useRef(false);
 
   useEffect(() => {
     try {
@@ -109,6 +112,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     if (ipPollRef.current) window.clearInterval(ipPollRef.current);
     if (webcamHealthRef.current) window.clearInterval(webcamHealthRef.current);
     if (screenShareHealthRef.current) window.clearInterval(screenShareHealthRef.current);
+    if (screenEvidenceIntervalRef.current) window.clearInterval(screenEvidenceIntervalRef.current);
     document.removeEventListener("visibilitychange", handleVisibilityChange);
     window.removeEventListener("blur", handleWindowBlur);
     window.removeEventListener("copy", handleCopyAttempt);
@@ -213,6 +217,10 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
       window.clearInterval(screenShareHealthRef.current);
       screenShareHealthRef.current = null;
     }
+    if (screenEvidenceIntervalRef.current) {
+      window.clearInterval(screenEvidenceIntervalRef.current);
+      screenEvidenceIntervalRef.current = null;
+    }
 
     const stream = screenShareStreamRef.current;
     if (stream) {
@@ -225,6 +233,77 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
 
     if (screenShareVideoRef.current) {
       screenShareVideoRef.current.srcObject = null;
+    }
+  }
+
+  async function uploadScreenShareEvidence(reason = "interval") {
+    const activeExamPaper = examPaperRef.current;
+    const token = sessionTokenRef.current;
+    const video = screenShareVideoRef.current;
+    if (!activeExamPaper || !token || !screenEvidenceEnabledRef.current || screenEvidenceUploadingRef.current) {
+      return;
+    }
+    if (!video || screenShareStatus !== "active" || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+      return;
+    }
+
+    const targetWidth = Math.min(video.videoWidth, 1280);
+    const scale = targetWidth / video.videoWidth;
+    const targetHeight = Math.max(1, Math.round(video.videoHeight * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return;
+    }
+
+    context.drawImage(video, 0, 0, targetWidth, targetHeight);
+    screenEvidenceUploadingRef.current = true;
+
+    try {
+      const blob = await new Promise((resolve) => {
+        canvas.toBlob((value) => resolve(value), "image/jpeg", 0.72);
+      });
+
+      if (!blob) {
+        return;
+      }
+
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const formData = new FormData();
+      formData.append("file", blob, `screen-share-${reason}-${timestamp}.jpg`);
+      formData.append("examId", activeExamPaper.exam.id);
+      formData.append("studentId", session.id);
+      formData.append("documentType", "screen_share_evidence");
+      formData.append("actorRole", "student");
+
+      const response = await fetch("/api/documents/upload", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`
+        },
+        body: formData
+      });
+
+      if (!response.ok) {
+        const contentType = response.headers.get("content-type") || "";
+        const payload = contentType.includes("application/json")
+          ? await response.json()
+          : await response.text();
+        const message = payload?.message || payload || "Evidence upload failed.";
+
+        if (response.status === 400 && /not configured/i.test(String(message))) {
+          screenEvidenceEnabledRef.current = false;
+          return;
+        }
+
+        throw new Error(String(message));
+      }
+    } catch (error) {
+      console.warn("Failed to upload screen-share evidence", error);
+    } finally {
+      screenEvidenceUploadingRef.current = false;
     }
   }
 
@@ -286,6 +365,16 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
           void markScreenShareBlocked("share_inactive", "Screen sharing became unavailable during the exam. Restart sharing to continue.");
         }
       }, 5000);
+      screenEvidenceEnabledRef.current = true;
+      if (screenEvidenceIntervalRef.current) {
+        window.clearInterval(screenEvidenceIntervalRef.current);
+      }
+      screenEvidenceIntervalRef.current = window.setInterval(() => {
+        void uploadScreenShareEvidence("interval");
+      }, 60000);
+      window.setTimeout(() => {
+        void uploadScreenShareEvidence("initial");
+      }, 8000);
 
       screenShareBlockReasonRef.current = "";
       setScreenShareStatus("active");

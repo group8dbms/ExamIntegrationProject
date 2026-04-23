@@ -9,11 +9,11 @@ const { isStorageConfigured, uploadBuffer, createDownloadUrl } = require("../ser
 const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
-const ALLOWED_DOCUMENT_TYPES = new Set(["result_report", "integrity_evidence"]);
+const ALLOWED_DOCUMENT_TYPES = new Set(["result_report", "integrity_evidence", "screen_share_evidence"]);
 
 function canAccessDocument(user, document) {
   if (["admin", "auditor"].includes(user.role)) return true;
-  if (user.role === "proctor") return document.document_type === "integrity_evidence";
+  if (user.role === "proctor") return ["integrity_evidence", "screen_share_evidence"].includes(document.document_type);
   if (user.role === "student") {
     return document.document_type === "result_report" && String(document.student_id) === String(user.id);
   }
@@ -27,7 +27,11 @@ const upload = multer({
 
 function buildDocumentKey({ examId, studentId, documentType, originalName }) {
   const safeName = path.basename(originalName || "document").replace(/[^a-zA-Z0-9._-]/g, "-");
-  const prefix = documentType === "result_report" ? "reports" : "integrity-evidence";
+  const prefix = documentType === "result_report"
+    ? "reports"
+    : documentType === "screen_share_evidence"
+      ? "screen-share-evidence"
+      : "integrity-evidence";
   return `${prefix}/${examId}/${studentId}/${Date.now()}-${safeName}`;
 }
 
@@ -90,7 +94,7 @@ router.get(
 router.post(
   "/upload",
   requireAuth,
-  requireRole("admin", "proctor"),
+  requireRole("admin", "proctor", "student"),
   upload.single("file"),
   asyncHandler(async (req, res) => {
     if (!isStorageConfigured()) {
@@ -111,7 +115,7 @@ router.post(
     const uploadedBy = req.user.id;
 
     if (!ALLOWED_DOCUMENT_TYPES.has(documentType)) {
-      return res.status(400).json({ message: "documentType must be either result_report or integrity_evidence." });
+      return res.status(400).json({ message: "documentType must be result_report, integrity_evidence, or screen_share_evidence." });
     }
 
     if (!examId || !studentId) {
@@ -120,6 +124,16 @@ router.post(
 
     if (documentType === "integrity_evidence" && !caseId) {
       return res.status(400).json({ message: "caseId is required when uploading integrity_evidence." });
+    }
+
+    if (req.user.role === "student") {
+      if (documentType !== "screen_share_evidence") {
+        return res.status(403).json({ message: "Students can upload only screen_share_evidence documents." });
+      }
+
+      if (String(studentId) !== String(req.user.id)) {
+        return res.status(403).json({ message: "Students can upload evidence only for their own exam attempt." });
+      }
     }
 
     const objectKey = buildDocumentKey({
