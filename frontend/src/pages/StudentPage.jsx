@@ -105,6 +105,7 @@ export default function StudentPage({ session, onLogout, setMessage }) {
   const [recheckDrafts, setRecheckDrafts] = useState({});
   const [startingExamId, setStartingExamId] = useState("");
   const popupWatchersRef = useRef(new Map());
+  const startingExamRef = useRef("");
 
   useEffect(() => {
     void loadWorkspace();
@@ -291,6 +292,10 @@ async function logWebcamStartBlock(item, message, reason) {
 
   async function startExam(item) {
     const examId = item.id;
+    if (startingExamRef.current === examId || popupWatchersRef.current.has(examId)) {
+      return;
+    }
+    startingExamRef.current = examId;
     setStartingExamId(examId);
     setMessage("Opening the exam window. Camera and screen-sharing permissions will be requested there.");
 
@@ -299,6 +304,7 @@ async function logWebcamStartBlock(item, message, reason) {
     const popup = window.open(url.toString(), `exam-window-${examId}`, "popup=yes,width=1440,height=920,resizable=yes,scrollbars=yes");
     if (!popup) {
       setMessage("Popup blocked. Allow popups for this site to start the exam window.");
+      startingExamRef.current = "";
       setStartingExamId("");
       return;
     }
@@ -320,6 +326,7 @@ async function logWebcamStartBlock(item, message, reason) {
     popupWatchersRef.current.set(examId, { popup, intervalId });
     popup.focus();
     setMessage("Exam window opened. Allow camera and screen sharing inside that window to begin the exam.");
+    startingExamRef.current = "";
     setStartingExamId("");
   }
 

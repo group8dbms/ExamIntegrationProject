@@ -99,6 +99,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   const screenEvidenceIntervalRef = useRef(null);
   const screenEvidenceEnabledRef = useRef(true);
   const screenEvidenceUploadingRef = useRef(false);
+  const loadStartedRef = useRef(false);
 
   useEffect(() => {
     try {
@@ -110,6 +111,10 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   }, []);
 
   useEffect(() => {
+    if (loadStartedRef.current) {
+      return undefined;
+    }
+    loadStartedRef.current = true;
     void loadExamWindow();
     return () => {
       cleanupRuntime();
