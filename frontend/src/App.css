@@ -1440,6 +1440,74 @@ code {
   color: #bfd5eb;
 }
 
+.nested-switcher {
+  margin-bottom: 1rem;
+}
+
+.screen-tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+}
+
+.screen-tile-card {
+  display: grid;
+  gap: 0.85rem;
+  padding: 0.85rem;
+  border-radius: 22px;
+  border: 1px solid rgba(111, 166, 217, 0.18);
+  background: rgba(8, 16, 26, 0.78);
+  text-align: left;
+  color: inherit;
+}
+
+.screen-tile-card.active {
+  border-color: rgba(117, 207, 255, 0.54);
+  box-shadow: 0 0 0 1px rgba(117, 207, 255, 0.2);
+}
+
+.screen-tile-preview {
+  overflow: hidden;
+  border-radius: 16px;
+  border: 1px solid rgba(126, 174, 214, 0.14);
+}
+
+.screen-tile-preview img {
+  width: 100%;
+  height: 180px;
+  object-fit: cover;
+  display: block;
+}
+
+.screen-tile-meta {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.screen-tile-meta span {
+  color: #bfd5eb;
+  font-size: 0.84rem;
+}
+
+.screen-content-layout {
+  display: grid;
+  gap: 1rem;
+}
+
+.screen-content-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+  padding: 0.85rem 1rem;
+  border-radius: 18px;
+  border: 1px solid rgba(110, 161, 210, 0.16);
+  background: rgba(10, 18, 28, 0.74);
+}
+
+.screen-content-summary span {
+  color: #bfd5eb;
+}
+
 @media (max-width: 980px) {
   .student-exam-meta,
   .student-result-meta,

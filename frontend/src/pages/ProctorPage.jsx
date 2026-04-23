@@ -85,11 +85,14 @@ function getDecisionLabel(value) {
 
 export default function ProctorPage({ session, onLogout, setMessage }) {
   const [activeView, setActiveView] = useState("monitor");
+  const [monitorTab, setMonitorTab] = useState("cases");
   const [liveExams, setLiveExams] = useState([]);
   const [selectedExamId, setSelectedExamId] = useState("");
   const [selectedExam, setSelectedExam] = useState(null);
   const [studentLogs, setStudentLogs] = useState([]);
   const [screenEvidenceByStudent, setScreenEvidenceByStudent] = useState({});
+  const [screenEvidenceDirectory, setScreenEvidenceDirectory] = useState([]);
+  const [selectedScreenStudentId, setSelectedScreenStudentId] = useState("");
   const [webcamEvidenceByStudent, setWebcamEvidenceByStudent] = useState({});
   const [penaltyDrafts, setPenaltyDrafts] = useState({});
   const [decisionDrafts, setDecisionDrafts] = useState({});
@@ -119,6 +122,10 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
     })),
     [studentLogs]
   );
+  const selectedScreenStudent = useMemo(
+    () => screenEvidenceDirectory.find((item) => item.studentId === selectedScreenStudentId) || null,
+    [screenEvidenceDirectory, selectedScreenStudentId]
+  );
 
   async function loadLiveExams(announce = true) {
     try {
@@ -129,6 +136,8 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
         setSelectedExamId("");
         setSelectedExam(null);
         setStudentLogs([]);
+        setScreenEvidenceDirectory([]);
+        setSelectedScreenStudentId("");
         setPenaltyDrafts({});
         setDecisionDrafts({});
       }
@@ -146,6 +155,7 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
       setSelectedExamId(examId);
       setSelectedExam(data.exam || null);
       setStudentLogs(data.items || []);
+      setMonitorTab("cases");
       await Promise.all([
         loadScreenEvidence(examId, data.items || []),
         loadWebcamEvidence(examId, data.items || [])
@@ -195,15 +205,20 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
       for (const item of documents.items || []) {
         const key = String(item.student_id || "");
         if (!docsByStudent.has(key)) {
-          docsByStudent.set(key, []);
+          docsByStudent.set(key, {
+            studentId: key,
+            studentName: item.student_name || "Unknown student",
+            items: []
+          });
         }
-        docsByStudent.get(key).push(item);
+        docsByStudent.get(key).items.push(item);
       }
 
       const nextEvidence = {};
-      for (const student of students) {
-        const items = (docsByStudent.get(String(student.studentId)) || []).slice(0, 6);
-        nextEvidence[student.studentId] = await Promise.all(items.map(async (item) => {
+      const nextDirectory = [];
+      for (const group of docsByStudent.values()) {
+        const items = group.items.slice(0, 12);
+        const hydrated = await Promise.all(items.map(async (item) => {
           try {
             const access = await api(`/api/documents/${item.id}/access-url`);
             return {
@@ -216,11 +231,32 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
             return null;
           }
         }));
-        nextEvidence[student.studentId] = nextEvidence[student.studentId].filter(Boolean);
+        const filtered = hydrated.filter(Boolean);
+        if (filtered.length) {
+          nextDirectory.push({
+            studentId: group.studentId,
+            studentName: group.studentName,
+            latestEvidence: filtered[0],
+            items: filtered
+          });
+        }
       }
 
+      for (const student of students) {
+        nextEvidence[student.studentId] = nextDirectory.find((item) => item.studentId === String(student.studentId))?.items?.slice(0, 6) || [];
+      }
+
+      setScreenEvidenceDirectory(nextDirectory);
+      setSelectedScreenStudentId((current) => {
+        if (current && nextDirectory.some((item) => item.studentId === current)) {
+          return current;
+        }
+        return nextDirectory[0]?.studentId || "";
+      });
       setScreenEvidenceByStudent(nextEvidence);
     } catch {
+      setScreenEvidenceDirectory([]);
+      setSelectedScreenStudentId("");
       setScreenEvidenceByStudent({});
     }
   }
@@ -361,6 +397,13 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
           <p>Only students with suspicious activity appear here. Events stay stored after the exam, and the proctor can both assign penalties and record the case decision needed before admin publishes results. Saving the decision also generates the integrity evidence report used by auditors.</p>
         </div>
 
+        <div className="view-switcher nested-switcher">
+          <button type="button" className={monitorTab === "cases" ? "view-pill active" : "view-pill"} onClick={() => setMonitorTab("cases")}>Case Review</button>
+          <button type="button" className={monitorTab === "screen_tiles" ? "view-pill active" : "view-pill"} onClick={() => setMonitorTab("screen_tiles")}>Screen Tiles</button>
+          <button type="button" className={monitorTab === "screen_content" ? "view-pill active" : "view-pill"} onClick={() => setMonitorTab("screen_content")}>Shared Screen Content</button>
+        </div>
+
+        {monitorTab === "cases" ? (
         <div className="publish-grid proctor-monitor-grid">
           <div className="task-card">
             <div className="task-card-header"><h3>Exams With Suspicious Activity</h3><button type="button" className="secondary-button" onClick={() => loadLiveExams()}>Refresh</button></div>
@@ -600,6 +643,76 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
             </div>
           </div>
         </div>
+        ) : monitorTab === "screen_tiles" ? (
+          <div className="task-card">
+            <div className="task-card-header">
+              <div>
+                <h3>Shared Screen Tiles</h3>
+                <span className="info-line">{selectedExam ? `${selectedExam.title} | ${selectedExam.course_code}` : "Choose an exam from Live Monitoring first"}</span>
+              </div>
+            </div>
+            {selectedExamId ? (
+              screenEvidenceDirectory.length ? (
+                <div className="screen-tile-grid">
+                  {screenEvidenceDirectory.map((student) => (
+                    <button
+                      key={student.studentId}
+                      type="button"
+                      className={selectedScreenStudentId === student.studentId ? "screen-tile-card active" : "screen-tile-card"}
+                      onClick={() => {
+                        setSelectedScreenStudentId(student.studentId);
+                        setMonitorTab("screen_content");
+                      }}
+                    >
+                      <div className="screen-tile-preview">
+                        <img src={student.latestEvidence.url} alt={student.studentName} />
+                      </div>
+                      <div className="screen-tile-meta">
+                        <strong>{student.studentName}</strong>
+                        <span>Student ID: {student.studentId}</span>
+                        <span>Latest capture: {formatDateTime(student.latestEvidence.createdAt)}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : <p>No shared-screen screenshots have been captured for this exam yet.</p>
+            ) : <p>Select an exam in the Case Review tab first to load captured screen tiles.</p>}
+          </div>
+        ) : (
+          <div className="task-card">
+            <div className="task-card-header">
+              <div>
+                <h3>Shared Screen Content</h3>
+                <span className="info-line">{selectedExam ? `${selectedExam.title} | ${selectedExam.course_code}` : "Choose an exam from Live Monitoring first"}</span>
+              </div>
+            </div>
+            {selectedExamId ? (
+              selectedScreenStudent ? (
+                <div className="screen-content-layout">
+                  <div className="screen-content-summary">
+                    <strong>{selectedScreenStudent.studentName}</strong>
+                    <span>Student ID: {selectedScreenStudent.studentId}</span>
+                    <span>Screenshots: {selectedScreenStudent.items.length}</span>
+                  </div>
+                  <div className="proctor-evidence-grid">
+                    {selectedScreenStudent.items.map((item) => (
+                      <a
+                        key={item.id}
+                        className="proctor-evidence-card"
+                        href={item.url}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <img src={item.url} alt={item.originalName || "Shared screen content"} />
+                        <span>{formatDateTime(item.createdAt)}</span>
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              ) : <p>No student screen-share content is selected yet. Open the Screen Tiles tab and choose a student tile.</p>
+            ) : <p>Select an exam in the Case Review tab first to load shared screen contents.</p>}
+          </div>
+        )}
       </div>
     )}
 
