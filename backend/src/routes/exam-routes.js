@@ -2463,19 +2463,27 @@ router.post(
       }
 
       const published = [];
+      let hashFailuresCount = 0;
       let storedReportsCount = 0;
       for (const draft of draftResults.rows) {
+        const verifiedResult = await client.query(`SELECT verify_submission_hash($1::uuid) AS verified`, [draft.submission_id]);
+        const submissionHashVerified = Boolean(verifiedResult.rows[0]?.verified);
+        if (!submissionHashVerified) {
+          hashFailuresCount += 1;
+        }
+
         const result = await client.query(
           `
             UPDATE result
                SET status = 'published',
                    case_status = $3::case_status,
+                   submission_hash_verified = $4,
                    published_by = $2,
                    published_at = NOW()
               WHERE id = $1
               RETURNING *
           `,
-          [draft.id, publishedBy, normalizeResultCaseStatus(draft.case_status)]
+          [draft.id, publishedBy, normalizeResultCaseStatus(draft.case_status), submissionHashVerified]
         );
         const outcome = buildPublishedResultOutcome(draft, readiness.exam.integrity_threshold);
         const publishedItem = {
@@ -2492,7 +2500,7 @@ router.post(
           awardedMarks: draft.awarded_marks,
           integrityScore: draft.integrity_score,
           caseStatus: draft.case_status,
-          submissionHashVerified: draft.submission_hash_verified
+          submissionHashVerified
         };
 
         published.push(publishedItem);
@@ -2533,7 +2541,11 @@ router.post(
         entityType: "exam",
         entityId: examId,
         ipAddress: req.ip,
-        details: { publishedCount: published.length, requestId: latestApproval.id }
+        details: {
+          publishedCount: published.length,
+          hashFailuresCount,
+          requestId: latestApproval.id
+        }
       });
 
       await client.query("COMMIT");
@@ -2570,6 +2582,7 @@ router.post(
         emailIssues,
         mailConfigured: isMailConfigured(),
         storageConfigured: isStorageConfigured(),
+        hashFailuresCount,
         storedReportsCount
       });
     } catch (error) {
