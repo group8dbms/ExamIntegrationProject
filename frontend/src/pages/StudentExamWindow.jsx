@@ -6,6 +6,10 @@ const EVIDENCE_CAPTURE_INTERVAL_MS = 15000;
 
 function getInheritedLaunchMedia(examId) {
   try {
+    const directMedia = window.__examInheritedMedia;
+    if (directMedia && (!window.__examInheritedExamId || String(window.__examInheritedExamId) === String(examId))) {
+      return directMedia;
+    }
     const openerStore = window.opener?.__examLaunchMediaStore;
     return openerStore?.[examId] || null;
   } catch {

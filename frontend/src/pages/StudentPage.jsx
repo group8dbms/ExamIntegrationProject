@@ -324,6 +324,11 @@ async function logWebcamStartBlock(item, message, reason) {
       return;
     }
 
+    // Mirror the approved media streams onto the popup window itself so the
+    // exam page can reuse them even if opener lookups are restricted.
+    popup.__examInheritedMedia = store[examId];
+    popup.__examInheritedExamId = examId;
+
     const previousWatcher = popupWatchersRef.current.get(examId);
     if (previousWatcher) {
       window.clearInterval(previousWatcher.intervalId);
