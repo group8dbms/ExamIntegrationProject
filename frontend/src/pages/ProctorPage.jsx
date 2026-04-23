@@ -83,6 +83,16 @@ function getDecisionLabel(value) {
     .join(" ");
 }
 
+function byNewestFirst(items = []) {
+  return [...items].sort((left, right) => new Date(right?.created_at || 0).getTime() - new Date(left?.created_at || 0).getTime());
+}
+
+function buildDisplayUrl(url, createdAt) {
+  if (!url) return url;
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}capturedAt=${encodeURIComponent(createdAt || Date.now())}`;
+}
+
 export default function ProctorPage({ session, onLogout, setMessage }) {
   const [activeView, setActiveView] = useState("monitor");
   const [monitorTab, setMonitorTab] = useState("cases");
@@ -265,7 +275,7 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
       const nextEvidence = {};
       const nextDirectory = [];
       for (const group of docsByStudent.values()) {
-        const items = group.items.slice(0, 12);
+        const items = byNewestFirst(group.items).slice(0, 12);
         const hydrated = await Promise.all(items.map(async (item) => {
           try {
             const access = await api(`/api/documents/${item.id}/access-url`);
@@ -273,7 +283,7 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
               id: item.id,
               createdAt: item.created_at,
               originalName: item.original_name,
-              url: access.url
+              url: buildDisplayUrl(access.url, item.created_at)
             };
           } catch {
             return null;
@@ -324,7 +334,7 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
 
       const nextEvidence = {};
       for (const student of students) {
-        const items = (docsByStudent.get(String(student.studentId)) || []).slice(0, 6);
+        const items = byNewestFirst(docsByStudent.get(String(student.studentId)) || []).slice(0, 6);
         nextEvidence[student.studentId] = await Promise.all(items.map(async (item) => {
           try {
             const access = await api(`/api/documents/${item.id}/access-url`);
@@ -332,7 +342,7 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
               id: item.id,
               createdAt: item.created_at,
               originalName: item.original_name,
-              url: access.url
+              url: buildDisplayUrl(access.url, item.created_at)
             };
           } catch {
             return null;
@@ -779,10 +789,10 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
                     <button
                       key={student.studentId}
                       type="button"
-                      className="screen-tile-card live-tile-card"
+                      className="screen-tile-card live-tile-card webcam-tile-card"
                       onClick={() => window.open(student.latestEvidence.url, "_blank", "noopener,noreferrer")}
                     >
-                      <div className="screen-tile-preview">
+                      <div className="screen-tile-preview webcam-tile-preview">
                         <img src={student.latestEvidence.url} alt={student.studentName} />
                       </div>
                       <div className="screen-tile-meta tile-footer">
