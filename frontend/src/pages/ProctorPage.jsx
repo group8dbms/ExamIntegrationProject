@@ -94,6 +94,7 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
   const [screenEvidenceDirectory, setScreenEvidenceDirectory] = useState([]);
   const [selectedScreenStudentId, setSelectedScreenStudentId] = useState("");
   const [webcamEvidenceByStudent, setWebcamEvidenceByStudent] = useState({});
+  const [integrityEvidenceByStudent, setIntegrityEvidenceByStudent] = useState({});
   const [penaltyDrafts, setPenaltyDrafts] = useState({});
   const [decisionDrafts, setDecisionDrafts] = useState({});
   const [reassignRequests, setReassignRequests] = useState([]);
@@ -110,7 +111,7 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
       if (selectedExamId) {
         void loadExamLogs(selectedExamId, false);
       }
-    }, 10000);
+    }, 15000);
 
     return () => window.clearInterval(timer);
   }, [selectedExamId]);
@@ -138,6 +139,8 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
         setStudentLogs([]);
         setScreenEvidenceDirectory([]);
         setSelectedScreenStudentId("");
+        setWebcamEvidenceByStudent({});
+        setIntegrityEvidenceByStudent({});
         setPenaltyDrafts({});
         setDecisionDrafts({});
       }
@@ -158,7 +161,8 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
       setMonitorTab("cases");
       await Promise.all([
         loadScreenEvidence(examId, data.items || []),
-        loadWebcamEvidence(examId, data.items || [])
+        loadWebcamEvidence(examId, data.items || []),
+        loadIntegrityEvidence(examId, data.items || [])
       ]);
 
       const nextDrafts = {};
@@ -299,6 +303,44 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
     }
   }
 
+  async function loadIntegrityEvidence(examId, students) {
+    try {
+      const documents = await api(`/api/documents?examId=${examId}&documentType=integrity_evidence`);
+      const docsByStudent = new Map();
+
+      for (const item of documents.items || []) {
+        const key = String(item.student_id || "");
+        if (!docsByStudent.has(key)) {
+          docsByStudent.set(key, []);
+        }
+        docsByStudent.get(key).push(item);
+      }
+
+      const nextEvidence = {};
+      for (const student of students) {
+        const items = (docsByStudent.get(String(student.studentId)) || []).slice(0, 6);
+        nextEvidence[student.studentId] = await Promise.all(items.map(async (item) => {
+          try {
+            const access = await api(`/api/documents/${item.id}/access-url`);
+            return {
+              id: item.id,
+              createdAt: item.created_at,
+              originalName: item.original_name,
+              url: access.url
+            };
+          } catch {
+            return null;
+          }
+        }));
+        nextEvidence[student.studentId] = nextEvidence[student.studentId].filter(Boolean);
+      }
+
+      setIntegrityEvidenceByStudent(nextEvidence);
+    } catch {
+      setIntegrityEvidenceByStudent({});
+    }
+  }
+
   async function approveReassignRequest(requestId) {
     try {
       const data = await api(`/api/exams/reassign-requests/${requestId}/approve`, {
@@ -365,7 +407,7 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
       const storageNote = data.storageConfigured
         ? data.evidenceStored
           ? " Integrity evidence was uploaded automatically."
-          : " Integrity evidence could not be uploaded."
+          : ` Integrity evidence could not be uploaded${data.storageError ? `: ${data.storageError}` : "."}`
         : " Secure storage is not configured, so no integrity evidence file was uploaded.";
       setMessage(`Proctor review submitted for this case.${storageNote}`);
       await Promise.all([loadExamLogs(selectedExamId, false), loadLiveExams(false)]);
@@ -458,6 +500,41 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
                       <span>Decision: {student.caseDecision || "Pending"}</span>
                       <span>Case ID: {student.caseId || "Not opened"}</span>
                     </div>
+
+                    {student.caseId ? (
+                      <div className="form-actions">
+                        {screenEvidenceByStudent[student.studentId]?.length ? (
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={() => {
+                              setSelectedScreenStudentId(String(student.studentId));
+                              setMonitorTab("screen_content");
+                            }}
+                          >
+                            View Shared Screen Files
+                          </button>
+                        ) : null}
+                        {webcamEvidenceByStudent[student.studentId]?.[0]?.url ? (
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={() => window.open(webcamEvidenceByStudent[student.studentId][0].url, "_blank", "noopener,noreferrer")}
+                          >
+                            Open Latest Webcam File
+                          </button>
+                        ) : null}
+                        {integrityEvidenceByStudent[student.studentId]?.[0]?.url ? (
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={() => window.open(integrityEvidenceByStudent[student.studentId][0].url, "_blank", "noopener,noreferrer")}
+                          >
+                            Open Integrity Report
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
 
                     {screenEvidenceByStudent[student.studentId]?.length ? (
                       <div className="proctor-evidence-panel">
@@ -634,6 +711,17 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
                             </tbody>
                           </table>
                         </div>
+                        {integrityEvidenceByStudent[student.studentId]?.length ? (
+                          <div className="form-actions">
+                            <button
+                              type="button"
+                              className="secondary-button"
+                              onClick={() => window.open(integrityEvidenceByStudent[student.studentId][0].url, "_blank", "noopener,noreferrer")}
+                            >
+                              Open Stored Integrity Report
+                            </button>
+                          </div>
+                        ) : null}
                       </>
                     )}
                   </article>

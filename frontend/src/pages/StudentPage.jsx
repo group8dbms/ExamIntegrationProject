@@ -10,6 +10,13 @@ function buildDeviceFingerprint() {
   ].join("|");
 }
 
+function getExamLaunchMediaStore() {
+  if (!window.__examLaunchMediaStore) {
+    window.__examLaunchMediaStore = {};
+  }
+  return window.__examLaunchMediaStore;
+}
+
 function getWebcamErrorMessage(error) {
   switch (error?.name) {
     case "NotAllowedError":
@@ -107,6 +114,7 @@ export default function StudentPage({ session, onLogout, setMessage }) {
     function handleExamSubmitted(event) {
       if (event.origin !== window.location.origin) return;
       if (event.data?.type === "student-exam-submitted" || event.data?.type === "student-exam-closed") {
+        cleanupLaunchMedia(event.data?.examId);
         const activeWatcher = popupWatchersRef.current.get(event.data?.examId);
         if (activeWatcher) {
           window.clearInterval(activeWatcher.intervalId);
@@ -124,6 +132,17 @@ export default function StudentPage({ session, onLogout, setMessage }) {
     popupWatchersRef.current.forEach((watcher) => window.clearInterval(watcher.intervalId));
     popupWatchersRef.current.clear();
   }, []);
+
+  function cleanupLaunchMedia(examId) {
+    if (!examId) return;
+    const store = getExamLaunchMediaStore();
+    const current = store[examId];
+    if (current) {
+      current.webcamStream?.getTracks?.().forEach((track) => track.stop());
+      current.screenShareStream?.getTracks?.().forEach((track) => track.stop());
+      delete store[examId];
+    }
+  }
 
   async function loadWorkspace() {
     await Promise.all([loadAssigned(), loadPublishedResults()]);
@@ -235,13 +254,12 @@ async function logWebcamStartBlock(item, message, reason) {
         },
         audio: false
       });
-      stream.getTracks().forEach((track) => track.stop());
-      return true;
+      return stream;
     } catch (error) {
       const message = getWebcamErrorMessage(error);
       await logWebcamStartBlock(item, message, error?.name || "webcam_unavailable");
       setMessage(message);
-      return false;
+      return null;
     }
   }
 
@@ -260,47 +278,51 @@ async function logWebcamStartBlock(item, message, reason) {
         },
         audio: false
       });
-      stream.getTracks().forEach((track) => track.stop());
-      return true;
+      return stream;
     } catch (error) {
       const message = ["NotAllowedError", "PermissionDeniedError"].includes(error?.name || "")
         ? "Screen sharing was denied or cancelled. Start the exam again and allow sharing."
         : "Screen sharing could not be started. Try again before launching the exam.";
       await logScreenShareStartBlock(item, message, error?.name || "screen_share_unavailable");
       setMessage(message);
-      return false;
+      return null;
     }
   }
 
   async function startExam(item) {
     const examId = item.id;
     setStartingExamId(examId);
+    setMessage("Checking webcam and screen-sharing permissions before launching the exam window...");
+    const webcamStream = await ensureWebcamAccessBeforeStart(item);
+    if (!webcamStream) {
+      setStartingExamId("");
+      return;
+    }
+
+    const screenShareStream = await ensureScreenShareAccessBeforeStart(item);
+    if (!screenShareStream) {
+      webcamStream.getTracks().forEach((track) => track.stop());
+      setStartingExamId("");
+      return;
+    }
+
+    const store = getExamLaunchMediaStore();
+    cleanupLaunchMedia(examId);
+    store[examId] = {
+      webcamStream,
+      screenShareStream,
+      createdAt: Date.now()
+    };
+
     const url = new URL(window.location.href);
-    url.search = "";
+    url.search = `mode=exam&examId=${encodeURIComponent(examId)}`;
     const popup = window.open(url.toString(), `exam-window-${examId}`, "popup=yes,width=1440,height=920,resizable=yes,scrollbars=yes");
     if (!popup) {
+      cleanupLaunchMedia(examId);
       setMessage("Popup blocked. Allow popups for this site to start the exam window.");
       setStartingExamId("");
       return;
     }
-
-    setMessage("Checking webcam and screen-sharing permissions before launching the exam window...");
-    const webcamReady = await ensureWebcamAccessBeforeStart(item);
-    if (!webcamReady) {
-      popup.close();
-      setStartingExamId("");
-      return;
-    }
-
-    const screenShareReady = await ensureScreenShareAccessBeforeStart(item);
-    if (!screenShareReady) {
-      popup.close();
-      setStartingExamId("");
-      return;
-    }
-
-    url.search = `mode=exam&examId=${encodeURIComponent(examId)}`;
-    popup.location.href = url.toString();
 
     const previousWatcher = popupWatchersRef.current.get(examId);
     if (previousWatcher) {
@@ -312,6 +334,7 @@ async function logWebcamStartBlock(item, message, reason) {
 
       window.clearInterval(intervalId);
       popupWatchersRef.current.delete(examId);
+      cleanupLaunchMedia(examId);
       void closeAttemptFromParent(examId, item.attempt_no);
     }, 1000);
 

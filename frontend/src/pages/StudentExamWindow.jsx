@@ -2,6 +2,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 
 const ACTIVE_ATTEMPT_KEY = "exam-integrity-active-attempt";
+const EVIDENCE_CAPTURE_INTERVAL_MS = 15000;
+
+function getInheritedLaunchMedia(examId) {
+  try {
+    const openerStore = window.opener?.__examLaunchMediaStore;
+    return openerStore?.[examId] || null;
+  } catch {
+    return null;
+  }
+}
 
 function buildDeviceFingerprint() {
   return [
@@ -243,17 +253,13 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   }
 
   async function startWebcamMonitoring() {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      await markWebcamBlocked("unsupported_browser", "This browser does not support webcam access. Switch to a supported browser to continue.");
-      return false;
-    }
-
     setWebcamStatus("checking");
     setWebcamError("");
 
     try {
       stopWebcamStream();
-      const stream = await navigator.mediaDevices.getUserMedia({
+      const inherited = getInheritedLaunchMedia(examId);
+      const stream = inherited?.webcamStream || await navigator.mediaDevices?.getUserMedia?.({
         video: {
           facingMode: "user"
         },
@@ -288,16 +294,20 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
       }
       webcamEvidenceIntervalRef.current = window.setInterval(() => {
         void uploadWebcamEvidence("interval");
-      }, 60000);
+      }, EVIDENCE_CAPTURE_INTERVAL_MS);
       window.setTimeout(() => {
         void uploadWebcamEvidence("initial");
-      }, 10000);
+      }, EVIDENCE_CAPTURE_INTERVAL_MS);
 
       webcamBlockReasonRef.current = "";
       setWebcamStatus("active");
       setWebcamError("");
       return true;
     } catch (error) {
+      if (!navigator.mediaDevices?.getUserMedia && !getInheritedLaunchMedia(examId)?.webcamStream) {
+        await markWebcamBlocked("unsupported_browser", "This browser does not support webcam access. Switch to a supported browser to continue.");
+        return false;
+      }
       await markWebcamBlocked(error?.name || "webcam_unavailable", getWebcamErrorMessage(error));
       return false;
     }
@@ -417,17 +427,13 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   }
 
   async function startScreenShareMonitoring() {
-    if (!navigator.mediaDevices?.getDisplayMedia) {
-      await markScreenShareBlocked("unsupported_browser", "This browser does not support screen sharing. Switch to a supported browser to continue.");
-      return false;
-    }
-
     setScreenShareStatus("checking");
     setScreenShareError("");
 
     try {
       stopScreenShareStream();
-      const stream = await navigator.mediaDevices.getDisplayMedia({
+      const inherited = getInheritedLaunchMedia(examId);
+      const stream = inherited?.screenShareStream || await navigator.mediaDevices?.getDisplayMedia?.({
         video: {
           frameRate: { ideal: 10, max: 15 }
         },
@@ -462,16 +468,20 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
       }
       screenEvidenceIntervalRef.current = window.setInterval(() => {
         void uploadScreenShareEvidence("interval");
-      }, 60000);
+      }, EVIDENCE_CAPTURE_INTERVAL_MS);
       window.setTimeout(() => {
         void uploadScreenShareEvidence("initial");
-      }, 8000);
+      }, EVIDENCE_CAPTURE_INTERVAL_MS);
 
       screenShareBlockReasonRef.current = "";
       setScreenShareStatus("active");
       setScreenShareError("");
       return true;
     } catch (error) {
+      if (!navigator.mediaDevices?.getDisplayMedia && !getInheritedLaunchMedia(examId)?.screenShareStream) {
+        await markScreenShareBlocked("unsupported_browser", "This browser does not support screen sharing. Switch to a supported browser to continue.");
+        return false;
+      }
       const isPermissionIssue = ["NotAllowedError", "PermissionDeniedError"].includes(error?.name || "");
       await markScreenShareBlocked(
         error?.name || "screen_share_unavailable",

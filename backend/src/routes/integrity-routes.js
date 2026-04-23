@@ -8,6 +8,15 @@ const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
 
+function mapStorageError(error) {
+  if (!error) return "unknown storage error";
+  const message = String(error.message || error);
+  if (/Could not load credentials from any providers/i.test(message)) {
+    return "S3 credentials are missing on the backend";
+  }
+  return message;
+}
+
 function mapCaseStatus(value) {
   return value || "not_opened";
 }
@@ -821,24 +830,29 @@ router.patch(
       });
 
       let storedDocument = null;
+      let storageError = null;
       if (contextResult.rows.length) {
-        storedDocument = await createIntegrityEvidenceDocument(client, {
-          caseRecord: updatedCase,
-          exam: {
-            id: contextResult.rows[0].exam_id,
-            title: contextResult.rows[0].exam_title,
-            course_code: contextResult.rows[0].course_code
-          },
-          student: {
-            id: contextResult.rows[0].student_id,
-            fullName: contextResult.rows[0].student_name,
-            email: contextResult.rows[0].student_email
-          },
-          events: eventResult.rows,
-          uploadedBy: actionBy,
-          actorRole,
-          ipAddress: req.ip
-        });
+        try {
+          storedDocument = await createIntegrityEvidenceDocument(client, {
+            caseRecord: updatedCase,
+            exam: {
+              id: contextResult.rows[0].exam_id,
+              title: contextResult.rows[0].exam_title,
+              course_code: contextResult.rows[0].course_code
+            },
+            student: {
+              id: contextResult.rows[0].student_id,
+              fullName: contextResult.rows[0].student_name,
+              email: contextResult.rows[0].student_email
+            },
+            events: eventResult.rows,
+            uploadedBy: actionBy,
+            actorRole,
+            ipAddress: req.ip
+          });
+        } catch (error) {
+          storageError = mapStorageError(error);
+        }
       }
 
       await client.query("COMMIT");
@@ -846,7 +860,8 @@ router.patch(
         ...updatedCase,
         storageConfigured: isStorageConfigured(),
         evidenceStored: Boolean(storedDocument?.stored),
-        evidenceDocumentId: storedDocument?.item?.id || null
+        evidenceDocumentId: storedDocument?.item?.id || null,
+        storageError
       });
     } catch (error) {
       await client.query("ROLLBACK");
@@ -1112,24 +1127,29 @@ router.post(
       });
 
       let storedDocument = null;
+      let storageError = null;
       if (contextResult.rows.length) {
-        storedDocument = await createIntegrityEvidenceDocument(client, {
-          caseRecord: updatedCase,
-          exam: {
-            id: contextResult.rows[0].exam_id,
-            title: contextResult.rows[0].exam_title,
-            course_code: contextResult.rows[0].course_code
-          },
-          student: {
-            id: contextResult.rows[0].student_id,
-            fullName: contextResult.rows[0].student_name,
-            email: contextResult.rows[0].student_email
-          },
-          events: reviewedEvents.rows,
-          uploadedBy: actionBy,
-          actorRole,
-          ipAddress: req.ip
-        });
+        try {
+          storedDocument = await createIntegrityEvidenceDocument(client, {
+            caseRecord: updatedCase,
+            exam: {
+              id: contextResult.rows[0].exam_id,
+              title: contextResult.rows[0].exam_title,
+              course_code: contextResult.rows[0].course_code
+            },
+            student: {
+              id: contextResult.rows[0].student_id,
+              fullName: contextResult.rows[0].student_name,
+              email: contextResult.rows[0].student_email
+            },
+            events: reviewedEvents.rows,
+            uploadedBy: actionBy,
+            actorRole,
+            ipAddress: req.ip
+          });
+        } catch (error) {
+          storageError = mapStorageError(error);
+        }
       }
 
       await client.query("COMMIT");
@@ -1137,7 +1157,8 @@ router.post(
         case: updatedCase,
         storageConfigured: isStorageConfigured(),
         evidenceStored: Boolean(storedDocument?.stored),
-        evidenceDocumentId: storedDocument?.item?.id || null
+        evidenceDocumentId: storedDocument?.item?.id || null,
+        storageError
       });
     } catch (error) {
       await client.query("ROLLBACK");
