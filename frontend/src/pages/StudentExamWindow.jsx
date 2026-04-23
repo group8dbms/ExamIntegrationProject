@@ -817,7 +817,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   async function submitExam(autoSubmit = false) {
     const activeExamPaper = examPaperRef.current;
     if (!activeExamPaper || submittedRef.current) return;
-    if (webcamStatus !== "active" || screenShareStatus !== "active") {
+    if (!autoSubmit && (webcamStatus !== "active" || screenShareStatus !== "active")) {
       setMessage("Reconnect the webcam and screen share before submitting the exam.");
       return;
     }
