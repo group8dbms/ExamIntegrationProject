@@ -128,6 +128,18 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
     [screenEvidenceDirectory, selectedScreenStudentId]
   );
 
+  async function ensureSelectedExam(nextTab = monitorTab) {
+    const fallbackExamId = selectedExamId || liveExams[0]?.id || "";
+    if (!fallbackExamId) {
+      setMessage("No current exam is available to display yet.");
+      return false;
+    }
+    if (!selectedExamId) {
+      await loadExamLogs(fallbackExamId, false, nextTab);
+    }
+    return true;
+  }
+
   async function loadLiveExams(announce = true) {
     try {
       const data = await api("/api/integrity/live-exams");
@@ -145,20 +157,22 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
         setDecisionDrafts({});
       }
       if (announce) {
-        setMessage(items.length ? `Loaded ${items.length} exam(s) with suspicious activity review records.` : "No suspicious activity reviews found right now.");
+        setMessage(items.length ? `Loaded ${items.length} current exam(s) for monitoring.` : "No current exams are available for monitoring right now.");
       }
     } catch (error) {
       setMessage(error.message);
     }
   }
 
-  async function loadExamLogs(examId, announce = true) {
+  async function loadExamLogs(examId, announce = true, nextTab = null) {
     try {
       const data = await api(`/api/integrity/exams/${examId}/live-logs`);
       setSelectedExamId(examId);
       setSelectedExam(data.exam || null);
       setStudentLogs(data.items || []);
-      setMonitorTab("cases");
+      if (nextTab) {
+        setMonitorTab(nextTab);
+      }
       await Promise.all([
         loadScreenEvidence(examId, data.items || []),
         loadWebcamEvidence(examId, data.items || []),
@@ -181,11 +195,30 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
       setDecisionDrafts(nextDecisionDrafts);
 
       if (announce) {
-        setMessage(`Loaded suspicious logs for ${data.exam?.title || "the selected exam"}.`);
+        setMessage(`Loaded monitoring data for ${data.exam?.title || "the selected exam"}.`);
       }
     } catch (error) {
       setMessage(error.message);
     }
+  }
+
+  function renderCurrentExamSelector(nextTab = monitorTab) {
+    return (
+      <div className="list-box">
+        {liveExams.map((exam) => <button key={exam.id} type="button" className={selectedExamId === exam.id ? "publish-card ready" : "publish-card muted"} onClick={() => loadExamLogs(exam.id, false, nextTab)}>
+          <div className="publish-card-top">
+            <div>
+              <strong>{exam.title}</strong>
+              <p>{exam.course_code}</p>
+            </div>
+            <span className="status-badge waiting">Current</span>
+          </div>
+          <p className="info-line">Candidates: {exam.candidate_count} | Flagged students: {exam.flagged_student_count}</p>
+          <p className="info-line">Window: {formatDateTime(exam.start_at)} to {formatDateTime(exam.end_at)}</p>
+        </button>)}
+        {!liveExams.length && <p>No current exams are available right now.</p>}
+      </div>
+    );
   }
 
   async function loadPendingReassignRequests(announce = true) {
@@ -448,22 +481,8 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
         {monitorTab === "cases" ? (
         <div className="publish-grid proctor-monitor-grid">
           <div className="task-card">
-            <div className="task-card-header"><h3>Exams With Suspicious Activity</h3><button type="button" className="secondary-button" onClick={() => loadLiveExams()}>Refresh</button></div>
-            <div className="list-box">
-              {liveExams.map((exam) => <button key={exam.id} type="button" className={selectedExamId === exam.id ? "publish-card ready" : "publish-card muted"} onClick={() => loadExamLogs(exam.id)}>
-                <div className="publish-card-top">
-                  <div>
-                    <strong>{exam.title}</strong>
-                    <p>{exam.course_code}</p>
-                  </div>
-                  <span className="status-badge waiting">Logs</span>
-                </div>
-                <p className="info-line">Flagged students: {exam.flagged_student_count} | Pending reviews: {exam.pending_review_count} | Suspicious events: {exam.suspicious_event_count}</p>
-                <p className="info-line">Window: {formatDateTime(exam.start_at)} to {formatDateTime(exam.end_at)}</p>
-                <p className="info-line">Last event: {formatDateTime(exam.last_event_at)}</p>
-              </button>)}
-              {!liveExams.length && <p>No exams have suspicious activity review records right now.</p>}
-            </div>
+            <div className="task-card-header"><h3>Current Exams</h3><button type="button" className="secondary-button" onClick={() => loadLiveExams()}>Refresh</button></div>
+            {renderCurrentExamSelector("cases")}
           </div>
 
           <div className="task-card">
@@ -736,9 +755,11 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
             <div className="task-card-header">
               <div>
                 <h3>Shared Screen Tiles</h3>
-                <span className="info-line">{selectedExam ? `${selectedExam.title} | ${selectedExam.course_code}` : "Choose an exam from Live Monitoring first"}</span>
+                <span className="info-line">{selectedExam ? `${selectedExam.title} | ${selectedExam.course_code}` : "Choose a current exam below"}</span>
               </div>
+              <button type="button" className="secondary-button" onClick={() => void ensureSelectedExam("screen_tiles")}>Load Current Exam</button>
             </div>
+            {renderCurrentExamSelector("screen_tiles")}
             {selectedExamId ? (
               screenEvidenceDirectory.length ? (
                 <div className="screen-tile-grid">
@@ -764,16 +785,18 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
                   ))}
                 </div>
               ) : <p>No shared-screen screenshots have been captured for this exam yet.</p>
-            ) : <p>Select an exam in the Case Review tab first to load captured screen tiles.</p>}
+            ) : <p>Select a current exam above to load captured screen tiles.</p>}
           </div>
         ) : (
           <div className="task-card">
             <div className="task-card-header">
               <div>
                 <h3>Shared Screen Content</h3>
-                <span className="info-line">{selectedExam ? `${selectedExam.title} | ${selectedExam.course_code}` : "Choose an exam from Live Monitoring first"}</span>
+                <span className="info-line">{selectedExam ? `${selectedExam.title} | ${selectedExam.course_code}` : "Choose a current exam below"}</span>
               </div>
+              <button type="button" className="secondary-button" onClick={() => void ensureSelectedExam("screen_content")}>Load Current Exam</button>
             </div>
+            {renderCurrentExamSelector("screen_content")}
             {selectedExamId ? (
               selectedScreenStudent ? (
                 <div className="screen-content-layout">
@@ -798,7 +821,7 @@ export default function ProctorPage({ session, onLogout, setMessage }) {
                   </div>
                 </div>
               ) : <p>No student screen-share content is selected yet. Open the Screen Tiles tab and choose a student tile.</p>
-            ) : <p>Select an exam in the Case Review tab first to load shared screen contents.</p>}
+            ) : <p>Select a current exam above to load shared screen contents.</p>}
           </div>
         )}
       </div>

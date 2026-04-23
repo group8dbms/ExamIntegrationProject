@@ -81,7 +81,17 @@ router.get(
   asyncHandler(async (req, res) => {
     const result = await pool.query(
       `
-        WITH latest_case_per_attempt AS (
+        WITH current_exams AS (
+          SELECT e.id, e.title, e.course_code, e.start_at, e.end_at
+          FROM exam e
+          WHERE NOW() BETWEEN e.start_at AND e.end_at
+        ),
+        candidate_totals AS (
+          SELECT ec.exam_id, COUNT(*) AS candidate_count
+          FROM exam_candidate ec
+          GROUP BY ec.exam_id
+        ),
+        latest_case_per_attempt AS (
           SELECT DISTINCT ON (c.exam_id, c.student_id, c.attempt_no)
             c.exam_id,
             c.student_id,
@@ -107,11 +117,12 @@ router.get(
            AND latest_case.attempt_no = ie.attempt_no
         )
         SELECT
-          e.id,
-          e.title,
-          e.course_code,
-          e.start_at,
-          e.end_at,
+          ce.id,
+          ce.title,
+          ce.course_code,
+          ce.start_at,
+          ce.end_at,
+          COALESCE(ct.candidate_count, 0) AS candidate_count,
           COUNT(DISTINCT ie.id) AS suspicious_event_count,
           COUNT(DISTINCT (sa.student_id, sa.attempt_no)) AS flagged_student_count,
           COUNT(DISTINCT CASE
@@ -120,14 +131,15 @@ router.get(
             ELSE NULL
           END) AS pending_review_count,
           MAX(ie.event_time) AS last_event_at
-        FROM exam e
-        JOIN suspicious_attempts sa ON sa.exam_id = e.id
-        JOIN integrity_event ie
+        FROM current_exams ce
+        LEFT JOIN candidate_totals ct ON ct.exam_id = ce.id
+        LEFT JOIN suspicious_attempts sa ON sa.exam_id = ce.id
+        LEFT JOIN integrity_event ie
           ON ie.exam_id = sa.exam_id
          AND ie.student_id = sa.student_id
          AND ie.attempt_no = sa.attempt_no
-        GROUP BY e.id, e.title, e.course_code, e.start_at, e.end_at
-        ORDER BY pending_review_count DESC, last_event_at DESC NULLS LAST, e.start_at DESC
+        GROUP BY ce.id, ce.title, ce.course_code, ce.start_at, ce.end_at, ct.candidate_count
+        ORDER BY pending_review_count DESC, suspicious_event_count DESC, ce.start_at DESC
       `
     );
 
