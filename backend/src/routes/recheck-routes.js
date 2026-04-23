@@ -9,6 +9,14 @@ const { requireAuth, requireRole, requireSelf } = require("../middleware/auth");
 const router = express.Router();
 
 function buildResultOutcome(row) {
+  if (row.submission_hash_verified === false) {
+    return {
+      thresholdBreached: false,
+      resultOutcome: "Withheld due to submission hash verification failure",
+      studentNotice: "Your submission could not be integrity-verified. Please contact the proctor or admin for review."
+    };
+  }
+
   const caseStatus = String(row.case_status || "").toLowerCase();
   if (caseStatus === "confirmed_cheating") {
     return {
@@ -88,7 +96,7 @@ router.get(
           LIMIT 1
         ) latest_doc ON TRUE
         WHERE r.student_id = $1
-          AND r.status = 'published'
+          AND r.status IN ('published', 'withheld')
         ORDER BY r.published_at DESC NULLS LAST, e.start_at DESC
       `,
       [studentId]

@@ -48,19 +48,26 @@ async function sendVerificationEmail({ toEmail, toName, verificationUrl }) {
 async function sendResultPublishedEmail({ toEmail, toName, examTitle, courseCode, awardedMarks, totalMarks, percentage, integrityScore, caseStatus, submissionHashVerified, thresholdBreached = false, integrityThreshold = null, resultOutcome = null }) {
   const transporter = createTransporter();
   const normalizedOutcome = String(resultOutcome || (thresholdBreached ? "Failed due to integrity threshold breach" : "Published"));
+  const hashVerificationFailed = submissionHashVerified === false;
   const failedOutcome = normalizedOutcome.toLowerCase().includes("failed") || normalizedOutcome.toLowerCase().includes("disqualified");
+  const withheldOutcome = normalizedOutcome.toLowerCase().includes("withheld");
   const displayCaseStatus = caseStatus || "clear";
   const cheatingConfirmed = String(displayCaseStatus).toLowerCase() === "confirmed_cheating" || normalizedOutcome.toLowerCase().includes("confirmed cheating");
 
   await transporter.sendMail({
     from: env.smtpFrom,
     to: toEmail,
-    subject: `${failedOutcome ? "Failed result" : "Result published"}: ${examTitle}`,
+    subject: `${withheldOutcome ? "Result withheld" : failedOutcome ? "Failed result" : "Result published"}: ${examTitle}`,
     html: `
       <div style="font-family:Segoe UI,Arial,sans-serif;color:#102033;line-height:1.6">
         <h2>Your exam result has been published</h2>
         <p>Hello ${toName || "Student"},</p>
         <p>Your result for <strong>${examTitle}</strong> (${courseCode}) is now available.</p>
+        ${hashVerificationFailed ? `
+          <div style="margin:16px 0;padding:14px 16px;border-radius:14px;background:#fff4e5;border:1px solid #f3c782;color:#7a4b00;font-weight:600">
+            Your result has been withheld because the submitted answers could not be hash-verified. Please contact the proctor or admin for review.
+          </div>
+        ` : ""}
         ${failedOutcome ? `
           <div style="margin:16px 0;padding:14px 16px;border-radius:14px;background:#fff0f0;border:1px solid #f2b4b4;color:#7b1f1f;font-weight:600">
             Final outcome: ${normalizedOutcome}
@@ -84,7 +91,7 @@ async function sendResultPublishedEmail({ toEmail, toName, examTitle, courseCode
           <tr><td style="padding:10px;border:1px solid #d7e2ee">Result Outcome</td><td style="padding:10px;border:1px solid #d7e2ee">${normalizedOutcome}</td></tr>
           <tr><td style="padding:10px;border:1px solid #d7e2ee">Submission Hash Verified</td><td style="padding:10px;border:1px solid #d7e2ee">${submissionHashVerified ? "Yes" : "No"}</td></tr>
         </table>
-        <p>If you believe there is an issue with your result, please contact your instructor for re-check workflow support.</p>
+        <p>${hashVerificationFailed ? "Please contact the proctor or admin for review before any marks can be released." : "If you believe there is an issue with your result, please contact your instructor for re-check workflow support."}</p>
       </div>
     `
   });

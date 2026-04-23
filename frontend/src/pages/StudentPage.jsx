@@ -32,6 +32,9 @@ function getResultBadge(item) {
   if (item.caseStatus === "confirmed_cheating") {
     return { label: "Disqualified", className: "status-badge disqualified" };
   }
+  if (item.resultOutcome?.toLowerCase().includes("withheld")) {
+    return { label: "Withheld", className: "status-badge waiting" };
+  }
   if (item.resultOutcome?.toLowerCase().includes("failed")) {
     return { label: "Failed", className: "status-badge waiting" };
   }

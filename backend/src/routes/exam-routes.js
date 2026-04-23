@@ -16,6 +16,15 @@ function normalizeResultCaseStatus(caseStatus) {
 }
 
 function buildPublishedResultOutcome(row, integrityThreshold) {
+  const submissionHashVerified = row.submission_hash_verified !== false;
+  if (!submissionHashVerified) {
+    return {
+      thresholdBreached: false,
+      resultOutcome: "Withheld due to submission hash verification failure",
+      studentNotice: "Your submission could not be integrity-verified. Please contact the proctor or admin for review."
+    };
+  }
+
   const caseStatus = String(row.case_status || "").toLowerCase();
   if (caseStatus === "confirmed_cheating") {
     return {
@@ -2475,7 +2484,7 @@ router.post(
         const result = await client.query(
           `
             UPDATE result
-               SET status = 'published',
+               SET status = $5::result_status,
                    case_status = $3::case_status,
                    submission_hash_verified = $4,
                    published_by = $2,
@@ -2483,9 +2492,21 @@ router.post(
               WHERE id = $1
               RETURNING *
           `,
-          [draft.id, publishedBy, normalizeResultCaseStatus(draft.case_status), submissionHashVerified]
+          [
+            draft.id,
+            publishedBy,
+            normalizeResultCaseStatus(draft.case_status),
+            submissionHashVerified,
+            submissionHashVerified ? "published" : "withheld"
+          ]
         );
-        const outcome = buildPublishedResultOutcome(draft, readiness.exam.integrity_threshold);
+        const outcome = buildPublishedResultOutcome(
+          {
+            ...draft,
+            submission_hash_verified: submissionHashVerified
+          },
+          readiness.exam.integrity_threshold
+        );
         const publishedItem = {
           ...result.rows[0],
           studentId: draft.student_id,

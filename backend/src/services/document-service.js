@@ -171,6 +171,12 @@ async function createResultReportDocument(client, {
     lines.push("");
   }
 
+  if (result.submissionHashVerified === false) {
+    lines.push("Important Note: This result has been withheld because the submitted answers could not be hash-verified.");
+    lines.push("Please contact the proctor or admin for review.");
+    lines.push("");
+  }
+
   lines.push("This report was generated automatically when results were published.");
 
   return replaceStoredDocument(client, {
