@@ -538,7 +538,12 @@ export default function AdminPage({ session, onLogout, setMessage }) {
     published: exams.filter((item) => item.publish_state === "published")
   }), [exams]);
 
-  const activeExam = useMemo(() => exams.find((item) => item.id === activeExamId) || null, [activeExamId, exams]);
+  const activeExams = useMemo(
+    () => exams.filter((item) => new Date(item.end_at).getTime() > Date.now()),
+    [exams]
+  );
+
+  const activeExam = useMemo(() => activeExams.find((item) => item.id === activeExamId) || null, [activeExamId, activeExams]);
   const selectedPublishExam = useMemo(() => exams.find((item) => item.id === publishExamId) || null, [exams, publishExamId]);
 
   async function handleFacultyAssign(event) {
@@ -1084,7 +1089,7 @@ export default function AdminPage({ session, onLogout, setMessage }) {
                 <button type="button" className="secondary-button" onClick={loadExams}>Refresh</button>
               </div>
               <div className="list-box">
-                {exams.length ? exams.map((item) => (
+                {activeExams.length ? activeExams.map((item) => (
                   <button
                     key={item.id}
                     type="button"
@@ -1256,7 +1261,7 @@ export default function AdminPage({ session, onLogout, setMessage }) {
                     </div>
                     <p className="info-line">Assigned: {item.candidate_count} | Submitted: {item.submitted_count} | Evaluated: {item.evaluated_count}</p>
                   </button>
-                )) : <p>No quizzes created yet.</p>}
+                )) : <p>No active quizzes right now.</p>}
               </div>
             </div>
 
