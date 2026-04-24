@@ -24,6 +24,7 @@ AS $$
         WHEN 'network_change' THEN 1.00
         WHEN 'webcam_block' THEN 4.50
         WHEN 'screen_share_block' THEN 5.00
+        WHEN 'face_absent' THEN 6.00
         ELSE 1.00
     END;
 $$;

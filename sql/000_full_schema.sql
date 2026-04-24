@@ -26,7 +26,8 @@ BEGIN
             'fullscreen_exit',
             'network_change',
             'webcam_block',
-            'screen_share_block'
+            'screen_share_block',
+            'face_absent'
         );
     END IF;
 

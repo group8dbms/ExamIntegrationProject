@@ -26,6 +26,8 @@ function getEventShortLabel(type) {
   switch (type) {
     case "tab_switch":
       return "Tab switch";
+    case "face_absent":
+      return "Face absent";
     case "window_blur":
       return "Window blur";
     case "full_exit_screen":

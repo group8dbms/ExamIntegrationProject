@@ -35,6 +35,7 @@ async function ensureIntegrityEventSchema() {
         ) THEN
           BEGIN
             ALTER TYPE integrity_event_type ADD VALUE IF NOT EXISTS 'screen_share_block';
+            ALTER TYPE integrity_event_type ADD VALUE IF NOT EXISTS 'face_absent';
           EXCEPTION
             WHEN duplicate_object THEN
               NULL;
@@ -69,6 +70,8 @@ function getDefaultIntegrityWeight(eventType) {
       return 4.5;
     case "screen_share_block":
       return 5;
+    case "face_absent":
+      return 6;
     default:
       return 1;
   }
@@ -382,7 +385,7 @@ router.post(
       const currentScore = Number(candidateState.suspicion_score || 0);
       const threshold = Number(thresholdResult.rows[0]?.integrity_threshold || 0);
 
-      if (threshold > 0 && currentScore >= threshold) {
+      if ((threshold > 0 && currentScore >= threshold) || eventType === "face_absent") {
         const existingCase = await client.query(
           `
             SELECT id, status
@@ -399,6 +402,9 @@ router.post(
 
         let caseId = existingCase.rows[0]?.id || null;
         if (!caseId) {
+          const summary = eventType === "face_absent"
+            ? "System-opened because no face was detected in the webcam for a sustained period."
+            : "System-opened after suspicion score threshold was reached.";
           const createdCase = await client.query(
             `
               INSERT INTO integrity_case (
@@ -412,7 +418,7 @@ router.post(
               attemptNo,
               currentScore,
               threshold,
-              "System-opened after suspicion score threshold was reached."
+              summary
             ]
           );
           caseId = createdCase.rows[0].id;

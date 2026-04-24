@@ -105,6 +105,7 @@ It is built for institutions that want controlled online exams with accountabili
 - final submission flow
 - webcam enforcement inside the popup window
 - screen-sharing enforcement inside the popup window
+- automatic face-presence monitoring inside the webcam stream
 - periodic webcam and shared-screen evidence capture
 
 ### 6. Attempt Safety And Closure Logic
@@ -120,6 +121,7 @@ It is built for institutions that want controlled online exams with accountabili
 - tracks focus loss and exit-screen events
 - tracks webcam-denied or webcam-disconnected states
 - tracks screen-share denied or stopped states
+- tracks when no face is detected continuously in the webcam for the configured threshold
 - records IP-related and device-related details
 - surfaces warnings to the student in the exam window
 - preserves all events for later proctor and auditor review
@@ -211,6 +213,9 @@ The latest round of changes added the following:
 - student exam popup now enforces webcam and shared-screen permission inside the exam window
 - webcam and screen-share stop events block continued answering until restored
 - webcam snapshots and shared-screen snapshots are captured every `5` seconds and stored through the document pipeline
+- webcam monitoring now checks for face presence and logs a `face_absent` integrity event after `10` seconds of continuous absence
+- when a `face_absent` event is logged, the system uploads webcam evidence and auto-opens or reuses an integrity case for proctor review
+- student webcam panel now shows the active detection engine and a no-face debug timer for easier live testing
 - proctor dashboard now has dedicated current-exam tiles for shared-screen and webcam evidence, refreshing with the latest snapshot per student
 
 ## Technology Stack

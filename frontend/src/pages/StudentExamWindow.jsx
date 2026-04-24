@@ -3,6 +3,9 @@ import { api } from "../lib/api";
 
 const ACTIVE_ATTEMPT_KEY = "exam-integrity-active-attempt";
 const EVIDENCE_CAPTURE_INTERVAL_MS = 5000;
+const FACE_DETECTION_INTERVAL_MS = 4000;
+const FACE_ABSENCE_WARNING_MS = 10000;
+const FACE_ABSENCE_EVENT_MS = 10000;
 
 function getInheritedLaunchMedia(examId) {
   try {
@@ -64,6 +67,12 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   const [integrityInfo, setIntegrityInfo] = useState({ tabSwitches: 0, copyAttempts: 0, pasteAttempts: 0, ipAddress: null, integrityScore: 0, caseStatus: "clear", submissionHashVerified: false });
   const [webcamStatus, setWebcamStatus] = useState("checking");
   const [webcamError, setWebcamError] = useState("");
+  const [webcamPresenceMessage, setWebcamPresenceMessage] = useState("");
+  const [faceDetectionDebug, setFaceDetectionDebug] = useState({
+    engine: "starting",
+    lastCheckAt: null,
+    noFaceSeconds: 0
+  });
   const [screenShareStatus, setScreenShareStatus] = useState("checking");
   const [screenShareError, setScreenShareError] = useState("");
   const [localWarning, setLocalWarning] = useState("");
@@ -91,6 +100,18 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
   const webcamEvidenceIntervalRef = useRef(null);
   const webcamEvidenceEnabledRef = useRef(true);
   const webcamEvidenceUploadingRef = useRef(false);
+  const faceDetectorRef = useRef(null);
+  const faceDetectorInitPromiseRef = useRef(null);
+  const faceDetectionIntervalRef = useRef(null);
+  const faceDetectionBusyRef = useRef(false);
+  const faceDetectionSupportedRef = useRef(true);
+  const faceDetectionEngineRef = useRef("native");
+  const faceAbsenceStateRef = useRef({
+    missingSince: null,
+    lastSeenAt: null,
+    warningShown: false,
+    logged: false
+  });
   const screenShareVideoRef = useRef(null);
   const screenShareStreamRef = useRef(null);
   const screenShareStatusRef = useRef("checking");
@@ -146,6 +167,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     if (ipPollRef.current) window.clearInterval(ipPollRef.current);
     if (webcamHealthRef.current) window.clearInterval(webcamHealthRef.current);
     if (webcamEvidenceIntervalRef.current) window.clearInterval(webcamEvidenceIntervalRef.current);
+    if (faceDetectionIntervalRef.current) window.clearInterval(faceDetectionIntervalRef.current);
     if (screenShareHealthRef.current) window.clearInterval(screenShareHealthRef.current);
     if (screenEvidenceIntervalRef.current) window.clearInterval(screenEvidenceIntervalRef.current);
     document.removeEventListener("visibilitychange", handleVisibilityChange);
@@ -253,6 +275,28 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
       window.clearInterval(webcamEvidenceIntervalRef.current);
       webcamEvidenceIntervalRef.current = null;
     }
+    if (faceDetectionIntervalRef.current) {
+      window.clearInterval(faceDetectionIntervalRef.current);
+      faceDetectionIntervalRef.current = null;
+    }
+    faceDetectionBusyRef.current = false;
+    faceDetectorInitPromiseRef.current = null;
+    if (faceDetectorRef.current?.dispose) {
+      try {
+        faceDetectorRef.current.dispose();
+      } catch {
+        // Ignore cleanup issues from third-party face detection runtimes.
+      }
+    }
+    faceDetectorRef.current = null;
+    faceDetectionEngineRef.current = "native";
+    faceAbsenceStateRef.current = {
+      missingSince: null,
+      lastSeenAt: null,
+      warningShown: false,
+      logged: false
+    };
+    setWebcamPresenceMessage("");
 
     const stream = webcamStreamRef.current;
     if (stream) {
@@ -341,6 +385,226 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
     }
   }
 
+  function getFaceDetectionUnavailableMessage() {
+    return "Automatic face-absence detection is unavailable in this browser. Webcam capture remains active for proctor review.";
+  }
+
+  function formatFaceDetectionTime(value) {
+    if (!value) return "Waiting";
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return "Waiting";
+    return parsed.toLocaleTimeString();
+  }
+
+  function getFaceDetectionActiveMessage() {
+    return faceDetectionEngineRef.current === "tfjs"
+      ? "Face detection is active using the TensorFlow fallback. Keep your face visible in the webcam."
+      : "Face detection is active. Keep your face visible in the webcam.";
+  }
+
+  async function ensureFaceDetector() {
+    if (faceDetectorRef.current) {
+      return faceDetectorRef.current;
+    }
+    if (faceDetectorInitPromiseRef.current) {
+      return faceDetectorInitPromiseRef.current;
+    }
+
+    faceDetectorInitPromiseRef.current = (async () => {
+      try {
+        if (faceDetectionEngineRef.current !== "tfjs" && typeof window.FaceDetector === "function") {
+          faceDetectionEngineRef.current = "native";
+          faceDetectorRef.current = new window.FaceDetector({
+            fastMode: true,
+            maxDetectedFaces: 1
+          });
+          faceDetectionSupportedRef.current = true;
+          setFaceDetectionDebug((current) => ({
+            ...current,
+            engine: "native"
+          }));
+          setWebcamPresenceMessage(getFaceDetectionActiveMessage());
+          return faceDetectorRef.current;
+        }
+
+        const [tf, blazeface] = await Promise.all([
+          import("@tensorflow/tfjs-core"),
+          import("@tensorflow-models/blazeface"),
+          import("@tensorflow/tfjs-backend-webgl")
+        ]);
+
+        await tf.setBackend("webgl").catch(() => null);
+        await tf.ready();
+
+        faceDetectionEngineRef.current = "tfjs";
+        faceDetectorRef.current = await blazeface.load({
+          maxFaces: 1
+        });
+        faceDetectionSupportedRef.current = true;
+        setFaceDetectionDebug((current) => ({
+          ...current,
+          engine: "tfjs"
+        }));
+        setWebcamPresenceMessage(getFaceDetectionActiveMessage());
+        return faceDetectorRef.current;
+      } catch (error) {
+        faceDetectionSupportedRef.current = false;
+        faceDetectionEngineRef.current = "unsupported";
+        faceDetectorRef.current = null;
+        console.warn("Failed to initialize face detection", error);
+        setFaceDetectionDebug((current) => ({
+          ...current,
+          engine: "unsupported"
+        }));
+        setWebcamPresenceMessage(getFaceDetectionUnavailableMessage());
+        return null;
+      } finally {
+        faceDetectorInitPromiseRef.current = null;
+      }
+    })();
+
+    return faceDetectorInitPromiseRef.current;
+  }
+
+  async function runFacePresenceCheck() {
+    const video = webcamVideoRef.current;
+    if (
+      faceDetectionBusyRef.current
+      || webcamStatusRef.current !== "active"
+      || !video
+      || video.readyState < 2
+      || !video.videoWidth
+      || !video.videoHeight
+    ) {
+      return;
+    }
+
+    const detector = await ensureFaceDetector();
+    if (!detector) {
+      return;
+    }
+
+    faceDetectionBusyRef.current = true;
+    try {
+      const faces = faceDetectionEngineRef.current === "tfjs"
+        ? await detector.estimateFaces(video, false, true)
+        : await detector.detect(video);
+      const now = Date.now();
+      const tracker = faceAbsenceStateRef.current;
+      setFaceDetectionDebug((current) => ({
+        ...current,
+        engine: faceDetectionEngineRef.current,
+        lastCheckAt: new Date(now).toISOString()
+      }));
+
+      if (faces.length > 0) {
+        const wasAbsentLongEnough = tracker.missingSince && now - tracker.missingSince >= FACE_ABSENCE_WARNING_MS;
+        faceAbsenceStateRef.current = {
+          missingSince: null,
+          lastSeenAt: now,
+          warningShown: false,
+          logged: false
+        };
+        if (wasAbsentLongEnough) {
+          showLocalWarning("Face detected again. Keep your face visible in the webcam for the rest of the exam.");
+        }
+        if (faceDetectionSupportedRef.current) {
+          setWebcamPresenceMessage(
+            faceDetectionEngineRef.current === "tfjs"
+              ? "Face detected. TensorFlow monitoring is active."
+              : "Face detected. Monitoring is active."
+          );
+        }
+        setFaceDetectionDebug((current) => ({
+          ...current,
+          noFaceSeconds: 0
+        }));
+        return;
+      }
+
+      const missingSince = tracker.missingSince || now;
+      const absenceDurationMs = now - missingSince;
+      faceAbsenceStateRef.current = {
+        ...tracker,
+        missingSince,
+        warningShown: tracker.warningShown || absenceDurationMs >= FACE_ABSENCE_WARNING_MS,
+        logged: tracker.logged
+      };
+
+      if (absenceDurationMs >= FACE_ABSENCE_WARNING_MS && !tracker.warningShown) {
+        showLocalWarning("No face is visible in the webcam. Please return to view immediately.");
+      }
+
+      setWebcamPresenceMessage(`No face detected for ${Math.round(absenceDurationMs / 1000)}s. Stay visible in the webcam.`);
+      setFaceDetectionDebug((current) => ({
+        ...current,
+        noFaceSeconds: Math.round(absenceDurationMs / 1000)
+      }));
+
+      if (absenceDurationMs >= FACE_ABSENCE_EVENT_MS && !tracker.logged) {
+        faceAbsenceStateRef.current = {
+          ...faceAbsenceStateRef.current,
+          logged: true
+        };
+        await uploadWebcamEvidence("face-absent");
+        await logIntegrityEvent("face_absent", {
+          absenceDurationSeconds: Math.round(absenceDurationMs / 1000),
+          detectedAt: new Date(now).toISOString(),
+          detectionMethod: faceDetectionEngineRef.current
+        }, 6);
+        showLocalWarning("No face was detected for too long. The attempt has been flagged for proctor review.");
+      }
+    } catch (error) {
+      const shouldRetryWithFallback = faceDetectionEngineRef.current === "native";
+      if (shouldRetryWithFallback) {
+        faceDetectorRef.current = null;
+        faceDetectionEngineRef.current = "tfjs";
+        setFaceDetectionDebug((current) => ({
+          ...current,
+          engine: "fallback_pending"
+        }));
+        setWebcamPresenceMessage("Retrying face detection with the TensorFlow fallback...");
+      } else {
+        console.warn("Failed to run webcam face detection", error);
+        setFaceDetectionDebug((current) => ({
+          ...current,
+          engine: "unsupported"
+        }));
+        setWebcamPresenceMessage(getFaceDetectionUnavailableMessage());
+      }
+    } finally {
+      faceDetectionBusyRef.current = false;
+    }
+  }
+
+  function startFaceDetectionMonitoring() {
+    if (faceDetectionIntervalRef.current) {
+      window.clearInterval(faceDetectionIntervalRef.current);
+    }
+
+    faceAbsenceStateRef.current = {
+      missingSince: null,
+      lastSeenAt: null,
+      warningShown: false,
+      logged: false
+    };
+
+    faceDetectionSupportedRef.current = true;
+    faceDetectionEngineRef.current = "native";
+    setFaceDetectionDebug({
+      engine: "starting",
+      lastCheckAt: null,
+      noFaceSeconds: 0
+    });
+    setWebcamPresenceMessage("Starting face detection...");
+    faceDetectionIntervalRef.current = window.setInterval(() => {
+      void runFacePresenceCheck();
+    }, FACE_DETECTION_INTERVAL_MS);
+    window.setTimeout(() => {
+      void runFacePresenceCheck();
+    }, Math.min(FACE_DETECTION_INTERVAL_MS, 1500));
+  }
+
   async function markWebcamBlocked(reason, message, details = {}) {
     stopWebcamStream();
     setWebcamStatus("blocked");
@@ -405,6 +669,7 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
       window.setTimeout(() => {
         void uploadWebcamEvidence("initial");
       }, EVIDENCE_CAPTURE_INTERVAL_MS);
+      startFaceDetectionMonitoring();
 
       webcamBlockReasonRef.current = "";
       setWebcamStatus("active");
@@ -937,7 +1202,12 @@ export default function StudentExamWindow({ session, examId, onExit, setMessage 
               <video ref={webcamVideoRef} className="webcam-preview" autoPlay muted playsInline />
               {webcamStatus !== "active" ? <div className="webcam-preview-overlay">{webcamStatus === "checking" ? "Connecting camera..." : "Camera access required"}</div> : null}
             </div>
-            <p className="info-line">{webcamError || "Keep your camera active throughout the exam. If the feed stops, exam actions are blocked until it is restored."}</p>
+            <p className="info-line">{webcamError || webcamPresenceMessage || "Keep your camera active throughout the exam. If the feed stops, exam actions are blocked until it is restored."}</p>
+            <div className="status-stack compact">
+              <span className="status-badge muted">Detector: {faceDetectionDebug.engine}</span>
+              <span className="status-badge muted">Last check: {formatFaceDetectionTime(faceDetectionDebug.lastCheckAt)}</span>
+              <span className="status-badge muted">No-face timer: {faceDetectionDebug.noFaceSeconds}s</span>
+            </div>
             <button type="button" className="secondary-button" onClick={() => void retryWebcamAndResume()}>
               {webcamStatus === "active" ? "Refresh Webcam" : "Retry Webcam"}
             </button>
